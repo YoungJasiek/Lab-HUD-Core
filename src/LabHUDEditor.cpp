@@ -368,10 +368,10 @@ namespace Lab {
         }
     }
     
-    float LabHUDEditor2D::screenToCanvasX(float sx) const { return (sx - _canvasPanX) / _canvasZoom; }
-    float LabHUDEditor2D::screenToCanvasY(float sy) const { return (sy - _canvasPanY) / _canvasZoom; }
-    float LabHUDEditor2D::canvasToScreenX(float cx) const { return cx * _canvasZoom + _canvasPanX; }
-    float LabHUDEditor2D::canvasToScreenY(float cy) const { return cy * _canvasZoom + _canvasPanY; }
+    float LabHUDEditor2D::screenToCanvasX(float sx) const { return (sx - _viewportX - _canvasPanX) / _canvasZoom; }
+    float LabHUDEditor2D::screenToCanvasY(float sy) const { return (sy - _viewportY - _canvasPanY) / _canvasZoom; }
+    float LabHUDEditor2D::canvasToScreenX(float cx) const { return _viewportX + _canvasPanX + cx * _canvasZoom; }
+    float LabHUDEditor2D::canvasToScreenY(float cy) const { return _viewportY + _canvasPanY + cy * _canvasZoom; }
     float LabHUDEditor2D::snapToGrid(float v) const { return _gridSnap > 0.0f ? std::round(v / _gridSnap) * _gridSnap : v; }
 
     void LabHUDEditor2D::update(float dt, float mouseX, float mouseY, bool lmbPressed, bool rmbPressed, float scrollDelta) {
@@ -456,6 +456,15 @@ namespace Lab {
                     targetAbs.x = snapToGrid(targetAbs.x);
                     targetAbs.y = snapToGrid(targetAbs.y);
                 }
+                if (_clampToSafeZone && !_selectedRefs.empty()) {
+                    Vec2 sz = getElementSize(_selectedRefs[0]);
+                    float minX = _project.resolutionW * 0.05f;
+                    float maxX = _project.resolutionW * 0.95f - sz.x;
+                    float minY = _project.resolutionH * 0.05f;
+                    float maxY = _project.resolutionH * 0.95f - sz.y;
+                    targetAbs.x = std::clamp(targetAbs.x, minX, std::max(minX, maxX));
+                    targetAbs.y = std::clamp(targetAbs.y, minY, std::max(minY, maxY));
+                }
                 setElementAbsPos(_selectedRefs[0], targetAbs);
             } else {
                 _isDragging = false;
@@ -528,20 +537,78 @@ namespace Lab {
     }
     
     void LabHUDEditor2D::renderEditorUI(int w, int h) {
-        Renderer::drawRect(0, 0, w, h, Vec3(0.12f, 0.12f, 0.12f));
-        _viewportX = 260; _viewportY = 76;
-        _viewportW = w - 560; _viewportH = h - 76 - 28;
+        float fw = static_cast<float>(w);
+        float fh = static_cast<float>(h);
+        Renderer::drawRect(0, 0, fw, fh, Vec3(0.12f, 0.12f, 0.12f));
 
-        // Render Canvas
-        Renderer::drawRect(_viewportX, _viewportY, _viewportW, _viewportH, Vec3(0.08f, 0.08f, 0.08f));
-        
+        float leftSidebarW = 260.0f;
+        float rightSidebarW = 380.0f;
+        float topBarsH = 72.0f; // Menubar (32px) + Toolbar (40px)
+        float statusH = 28.0f;
+
+        _viewportX = leftSidebarW;
+        _viewportY = topBarsH;
+        _viewportW = fw - leftSidebarW - rightSidebarW;
+        _viewportH = fh - topBarsH - statusH;
+
+        // Viewport canvas background
+        Renderer::drawRect(_viewportX, _viewportY, _viewportW, _viewportH, Vec3(0.06f, 0.06f, 0.07f));
+
+        // 1. Grid
+        if (_showGrid) {
+            renderGrid(_viewportX, _viewportY, _viewportW, _viewportH);
+        }
+
+        // 2. Alignment Guides & Safety Zone ("pas bezpieczeństwa")
+        if (_showGuides || _showSafeZone) {
+            renderAlignmentGuides(_viewportX, _viewportY);
+        }
+
+        // 3. Render all HUD elements (hierarchical)
         for (int i = 0; i < (int)_project.rootElements.size(); ++i) {
             Vec2 absP = getElementAbsPos({i, -1});
             renderHUDElementRecursive(_project.rootElements[i], absP, _viewportX, _viewportY, {i, -1});
         }
 
-        renderLeftSidebar(0, 32, 260, h - 32 - 28);
-        renderRightPropertyPanel(w - 300, 32, 300, h - 32 - 28);
+        // 4. Selection Outlines and Handles
+        if (_selectedRef.isValid()) {
+            renderSelectionOutlineAndHandles(_selectedRef, _viewportX, _viewportY);
+        }
+        for (const auto& ref : _selectedRefs) {
+            if (ref.isValid() && ref != _selectedRef) {
+                renderSelectionOutlineAndHandles(ref, _viewportX, _viewportY);
+            }
+        }
+
+        // 5. Marquee selection
+        if (_isMarqueeSelecting) {
+            float sx = canvasToScreenX(_marqueeStartX);
+            float sy = canvasToScreenY(_marqueeStartY);
+            float ex = canvasToScreenX(_marqueeEndX);
+            float ey = canvasToScreenY(_marqueeEndY);
+            float mx = std::min(sx, ex);
+            float my = std::min(sy, ey);
+            float mw = std::abs(ex - sx);
+            float mh = std::abs(ey - sy);
+            Renderer::drawRect(mx, my, mw, 1, Vec3(0.2f, 0.6f, 1.0f));
+            Renderer::drawRect(mx, my, 1, mh, Vec3(0.2f, 0.6f, 1.0f));
+            Renderer::drawRect(mx, my + mh - 1, mw, 1, Vec3(0.2f, 0.6f, 1.0f));
+            Renderer::drawRect(mx + mw - 1, my, 1, mh, Vec3(0.2f, 0.6f, 1.0f));
+        }
+
+        // 6. Left and Right Sidebars
+        renderLeftSidebar(0, topBarsH, leftSidebarW, fh - topBarsH - statusH);
+        renderRightPropertyPanel(fw - rightSidebarW, topBarsH, rightSidebarW, fh - topBarsH - statusH);
+
+        // 7. Top Bar (Top Menu Bar + Toolbar)
+        renderTopMenuBar(fw);
+        renderToolbar(fw);
+
+        // 8. Status Bar
+        renderStatusBar(fw, fh);
+
+        // 9. Dropdown Menus (drawn on top of all UI)
+        renderDropdownMenus(fw, fh);
     }
 
     void LabHUDEditor2D::renderModalDialog() {
@@ -848,25 +915,30 @@ namespace Lab {
     
     void LabHUDEditor2D::renderGrid(float vx, float vy, float vw, float vh) {
         float scaledSnap = _gridSnap * _canvasZoom;
-        if (scaledSnap < 6.0f) return;
+        if (scaledSnap < 4.0f) return;
 
-        int startX = (int)(- _canvasPanX / scaledSnap) - 1;
-        int endX = (int)((vw - _canvasPanX) / scaledSnap) + 1;
-        for (int i = startX; i <= endX; ++i) {
-            float gx = vx + _canvasPanX + static_cast<float>(i) * scaledSnap;
+        float cx = vx + _canvasPanX;
+        float cy = vy + _canvasPanY;
+        float resW = _project.resolutionW * _canvasZoom;
+        float resH = _project.resolutionH * _canvasZoom;
+
+        // Draw vertical grid lines across canvas resolution area
+        int numLinesX = static_cast<int>(resW / scaledSnap);
+        for (int i = 0; i <= numLinesX; ++i) {
+            float gx = cx + static_cast<float>(i) * scaledSnap;
             if (gx >= vx && gx <= vx + vw) {
                 bool major = (i % 5 == 0);
-                Renderer::drawRect(gx, vy, 1.0f, vh, major ? Vec3(0.22f, 0.22f, 0.22f) : Vec3(0.12f, 0.12f, 0.12f));
+                Renderer::drawRect(gx, std::max(cy, vy), 1.0f, std::min(resH, vh), major ? Vec3(0.24f, 0.25f, 0.28f) : Vec3(0.14f, 0.15f, 0.17f));
             }
         }
 
-        int startY = (int)(- _canvasPanY / scaledSnap) - 1;
-        int endY = (int)((vh - _canvasPanY) / scaledSnap) + 1;
-        for (int i = startY; i <= endY; ++i) {
-            float gy = vy + _canvasPanY + static_cast<float>(i) * scaledSnap;
+        // Draw horizontal grid lines across canvas resolution area
+        int numLinesY = static_cast<int>(resH / scaledSnap);
+        for (int i = 0; i <= numLinesY; ++i) {
+            float gy = cy + static_cast<float>(i) * scaledSnap;
             if (gy >= vy && gy <= vy + vh) {
                 bool major = (i % 5 == 0);
-                Renderer::drawRect(vx, gy, vw, 1.0f, major ? Vec3(0.22f, 0.22f, 0.22f) : Vec3(0.12f, 0.12f, 0.12f));
+                Renderer::drawRect(std::max(cx, vx), gy, std::min(resW, vw), 1.0f, major ? Vec3(0.24f, 0.25f, 0.28f) : Vec3(0.14f, 0.15f, 0.17f));
             }
         }
     }
@@ -876,11 +948,63 @@ namespace Lab {
         float cy = vy + _canvasPanY;
         float resW = _project.resolutionW * _canvasZoom;
         float resH = _project.resolutionH * _canvasZoom;
-        Vec3 guideCol(0.1f, 0.7f, 0.9f);
-        Renderer::drawRect(cx, cy, resW, 1.5f, guideCol);
-        Renderer::drawRect(cx, cy, 1.5f, resH, guideCol);
-        Renderer::drawRect(cx, cy + resH - 1.5f, resW, 1.5f, guideCol);
-        Renderer::drawRect(cx + resW - 1.5f, cy, 1.5f, resH, guideCol);
+
+        // 1. Canvas Resolution Background (1920x1080 display space)
+        Renderer::drawRect(cx, cy, resW, resH, Vec3(0.09f, 0.10f, 0.12f));
+
+        // Screen Bounds Border
+        Vec3 guideCol(0.25f, 0.55f, 0.95f);
+        Renderer::drawRect(cx, cy, resW, 2.0f, guideCol);
+        Renderer::drawRect(cx, cy, 2.0f, resH, guideCol);
+        Renderer::drawRect(cx, cy + resH - 2.0f, resW, 2.0f, guideCol);
+        Renderer::drawRect(cx + resW - 2.0f, cy, 2.0f, resH, guideCol);
+        LabFont::drawText(cx + 8.0f, cy + 6.0f, "SCREEN BOUNDS (" + std::to_string((int)_project.resolutionW) + "x" + std::to_string((int)_project.resolutionH) + ")", 1.4f, guideCol, LabFontType::System);
+
+        // 2. Safety Zones (Pasy Bezpieczenstwa)
+        if (_showSafeZone) {
+            // Action Safe: 2.5% margin (95% area)
+            float asMarginX = resW * 0.025f;
+            float asMarginY = resH * 0.025f;
+            float asX = cx + asMarginX;
+            float asY = cy + asMarginY;
+            float asW = resW - asMarginX * 2.0f;
+            float asH = resH - asMarginY * 2.0f;
+            Vec3 actionSafeCol(0.1f, 0.8f, 0.5f);
+
+            Renderer::drawRect(asX, asY, asW, 1.0f, actionSafeCol);
+            Renderer::drawRect(asX, asY, 1.0f, asH, actionSafeCol);
+            Renderer::drawRect(asX, asY + asH - 1.0f, asW, 1.0f, actionSafeCol);
+            Renderer::drawRect(asX + asW - 1.0f, asY, 1.0f, asH, actionSafeCol);
+            LabFont::drawText(asX + 8.0f, asY + 4.0f, "ACTION SAFE (95%)", 1.2f, actionSafeCol, LabFontType::System);
+
+            // Title / HUD Safe: 5.0% margin (90% area) - Critical safe zone to prevent HUD from leaving screen
+            float tsMarginX = resW * 0.05f;
+            float tsMarginY = resH * 0.05f;
+            float tsX = cx + tsMarginX;
+            float tsY = cy + tsMarginY;
+            float tsW = resW - tsMarginX * 2.0f;
+            float tsH = resH - tsMarginY * 2.0f;
+            Vec3 hudSafeCol(0.98f, 0.78f, 0.08f);
+
+            Renderer::drawRect(tsX, tsY, tsW, 1.5f, hudSafeCol);
+            Renderer::drawRect(tsX, tsY, 1.5f, tsH, hudSafeCol);
+            Renderer::drawRect(tsX, tsY + tsH - 1.5f, tsW, 1.5f, hudSafeCol);
+            Renderer::drawRect(tsX + tsW - 1.5f, tsY, 1.5f, tsH, hudSafeCol);
+
+            // Corner brackets
+            float bracketLen = 22.0f;
+            float bracketThick = 3.0f;
+            Renderer::drawRect(tsX, tsY, bracketLen, bracketThick, hudSafeCol);
+            Renderer::drawRect(tsX, tsY, bracketThick, bracketLen, hudSafeCol);
+            Renderer::drawRect(tsX + tsW - bracketLen, tsY, bracketLen, bracketThick, hudSafeCol);
+            Renderer::drawRect(tsX + tsW - bracketThick, tsY, bracketThick, bracketLen, hudSafeCol);
+            Renderer::drawRect(tsX, tsY + tsH - bracketThick, bracketLen, bracketThick, hudSafeCol);
+            Renderer::drawRect(tsX, tsY + tsH - bracketLen, bracketThick, bracketLen, hudSafeCol);
+            Renderer::drawRect(tsX + tsW - bracketLen, tsY + tsH - bracketThick, bracketLen, bracketThick, hudSafeCol);
+            Renderer::drawRect(tsX + tsW - bracketThick, tsY + tsH - bracketLen, bracketThick, bracketLen, hudSafeCol);
+
+            LabFont::drawText(tsX + 8.0f, tsY + 6.0f, "PAS BEZPIECZENSTWA HUD (90% TITLE SAFE) - KEEP HUD WIDGETS INSIDE", 1.3f, hudSafeCol, LabFontType::System);
+        }
     }
 
     void LabHUDEditor2D::renderSelectionOutlineAndHandles(const ElementRef& ref, float vx, float vy) {
@@ -1162,6 +1286,33 @@ namespace Lab {
         if (drawTool(6, "Duplicate")) duplicateSelected();
         drawSep();
         if (drawTool(8, "Import Asset from Disk")) importCustomAsset();
+        drawSep();
+
+        auto drawToggleTool = [&](const std::string& label, bool active, const std::string& tooltip) -> bool {
+            (void)tooltip;
+            float tw = 64.0f;
+            bool clicked = false;
+            bool hover = (_mouseX >= tx && _mouseX <= tx + tw && _mouseY >= 36.0f && _mouseY <= 68.0f);
+            bool pressed = hover && _lmbPressed;
+            Vec3 bg = active ? Vec3(0.24f, 0.42f, 0.26f) : (pressed ? Vec3(0.14f, 0.14f, 0.14f) : (hover ? Vec3(0.26f, 0.26f, 0.26f) : Vec3(0.20f, 0.20f, 0.20f)));
+            Renderer::drawRect(tx, 36.0f, tw, 32.0f, bg);
+            drawHammerBevel(tx, 36.0f, tw, 32.0f, pressed || active);
+            Vec3 textCol = active ? Vec3(0.95f, 1.0f, 0.95f) : Vec3(0.70f, 0.70f, 0.70f);
+            LabFont::drawText(tx + 6.0f, 44.0f, label, 1.25f, textCol, LabFontType::System);
+            if (hover && _lmbClicked) clicked = true;
+            tx += tw + 4.0f;
+            return clicked;
+        };
+
+        if (drawToggleTool(_showGrid ? "[X] GRID" : "[ ] GRID", _showGrid, "Toggle Canvas Grid")) {
+            _showGrid = !_showGrid;
+        }
+        if (drawToggleTool(_showSafeZone ? "[X] SAFE" : "[ ] SAFE", _showSafeZone, "Toggle Safe Zones (95% / 90%)")) {
+            _showSafeZone = !_showSafeZone;
+        }
+        if (drawToggleTool(_clampToSafeZone ? "[X] CLAMP" : "[ ] CLAMP", _clampToSafeZone, "Toggle Safe Zone Drag Clamping")) {
+            _clampToSafeZone = !_clampToSafeZone;
+        }
     }
 
     void LabHUDEditor2D::renderStatusBar(float w, float h) {
@@ -1169,8 +1320,9 @@ namespace Lab {
         drawHammerBevel(0, h - 28.0f, w, 28.0f, false);
 
         char buf[256];
-        snprintf(buf, sizeof(buf), "Tool: Select | Zoom: %.2fx | Snap: %.0fpx | Elements: %zu | Project: %s%s",
-            _canvasZoom, _gridSnap, _project.rootElements.size(), _project.name.c_str(), _projectDirty ? " *" : "");
+        snprintf(buf, sizeof(buf), "Tool: Select | Zoom: %.2fx | Snap: %.0fpx | Grid: %s | SafeZone: %s | Clamp: %s | Elements: %zu | Project: %s%s",
+            _canvasZoom, _gridSnap, _showGrid ? "ON" : "OFF", _showSafeZone ? "ON" : "OFF", _clampToSafeZone ? "ON" : "OFF",
+            _project.rootElements.size(), _project.name.c_str(), _projectDirty ? " *" : "");
         LabFont::drawText(12.0f, h - 22.0f, buf, 1.4f, Vec3(0.85f, 0.85f, 0.85f), LabFontType::System);
     }
 
@@ -1186,7 +1338,7 @@ namespace Lab {
         } else if (_activeDropdown == HUDEditorDropdown::Edit) {
             items = {"Undo (Ctrl+Z)", "Redo (Ctrl+Y)", "-", "Delete (Del)", "Duplicate (Ctrl+D)", "Select All (Ctrl+A)"};
         } else if (_activeDropdown == HUDEditorDropdown::View) {
-            items = {"Zoom In (+)", "Zoom Out (-)", "Reset Zoom & Pan", "-", "Toggle Grid", "Toggle Guides"};
+            items = {"Zoom In (+)", "Zoom Out (-)", "Reset Zoom & Pan", "-", "Toggle Grid", "Toggle Guides", "Toggle Safe Zone", "Toggle Clamp to Safe Zone"};
         } else if (_activeDropdown == HUDEditorDropdown::Insert) {
             for (const auto& t : _widgetTemplates) items.push_back(t.name);
         } else if (_activeDropdown == HUDEditorDropdown::Assets) {
@@ -1221,6 +1373,8 @@ namespace Lab {
                 if (item == "Refresh Assets Folder") scanAssets();
                 if (item == "Toggle Grid") _showGrid = !_showGrid;
                 if (item == "Toggle Guides") _showGuides = !_showGuides;
+                if (item == "Toggle Safe Zone") _showSafeZone = !_showSafeZone;
+                if (item == "Toggle Clamp to Safe Zone") _clampToSafeZone = !_clampToSafeZone;
                 if (item == "Zoom In (+)") _canvasZoom = std::min(5.0f, _canvasZoom * 1.25f);
                 if (item == "Zoom Out (-)") _canvasZoom = std::max(0.1f, _canvasZoom / 1.25f);
                 if (item == "Reset Zoom & Pan") { _canvasZoom = 0.75f; _canvasPanX = 20.0f; _canvasPanY = 20.0f; }
