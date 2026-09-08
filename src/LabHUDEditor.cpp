@@ -382,7 +382,10 @@ namespace Lab {
         _lmbClicked = _lmbPressed && !_lastLmb;
         _rmbClicked = _rmbPressed && !_lastRmb;
 
-        if (_mode == HUDEditorMode::ProjectSelect) { return; }
+        if (_mode == HUDEditorMode::ProjectSelect) {
+            updateProjectSelect(dt);
+            return;
+        }
         
         if (_modalType != ModalType::None) {
             return; // Modal blocks interaction
@@ -513,7 +516,7 @@ namespace Lab {
         Renderer::beginUI(screenWidth, screenHeight);
         
         if (_mode == HUDEditorMode::ProjectSelect) {
-            // ...
+            renderProjectSelect(screenWidth, screenHeight);
         } else {
             renderEditorUI(screenWidth, screenHeight);
         }
