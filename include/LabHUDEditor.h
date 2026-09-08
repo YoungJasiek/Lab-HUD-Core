@@ -1,6 +1,7 @@
 #pragma once
 #ifndef LAB_HUD_EDITOR_H
 #define LAB_HUD_EDITOR_H
+
 #include <string>
 #include <vector>
 #include <array>
@@ -107,6 +108,22 @@ namespace Lab {
     }
 
     // =========================================================================
+    // Element Reference (Points to root element or nested child)
+    // =========================================================================
+
+    struct ElementRef {
+        int rootIndex = -1;
+        int childIndex = -1; // -1 if root element
+
+        bool isValid() const { return rootIndex >= 0; }
+        bool isChild() const { return rootIndex >= 0 && childIndex >= 0; }
+        bool isRoot() const { return rootIndex >= 0 && childIndex == -1; }
+        bool operator==(const ElementRef& o) const { return rootIndex == o.rootIndex && childIndex == o.childIndex; }
+        bool operator!=(const ElementRef& o) const { return !(*this == o); }
+        void invalidate() { rootIndex = -1; childIndex = -1; }
+    };
+
+    // =========================================================================
     // HUD Element — single 2D widget on the canvas
     // =========================================================================
 
@@ -131,6 +148,11 @@ namespace Lab {
 
         // Data binding (runtime: "player.health", "player.ammo", etc.)
         std::string binding;
+
+        // Lua Scripting & Dynamic Game Logic
+        std::string luaOnUpdate; // Called each tick to update text/visibility/state
+        std::string luaOnClick;  // Called on click event
+        std::string luaCustom;   // Arbitrary custom Lua snippet or script path
 
         // Icon ID (for Icon type, maps to HammerIcons)
         int iconId = -1;
@@ -166,7 +188,7 @@ namespace Lab {
     };
 
     // =========================================================================
-    // Editor Mode / State
+    // Editor Enums & UI Modes
     // =========================================================================
 
     enum class HUDEditorMode : int {
@@ -190,9 +212,25 @@ namespace Lab {
         Help = 5
     };
 
-    // =========================================================================
-    // Widget Library Entry (palette item)
-    // =========================================================================
+    enum class HUDSidebarTab : int {
+        Widgets = 0,
+        Hierarchy = 1,
+        Assets = 2
+    };
+
+    enum class ModalType : int {
+        None = 0,
+        EditText = 1,
+        EditLua = 2,
+        Rename = 3
+    };
+
+    struct ContextMenuItem {
+        std::string label;
+        std::function<void()> action;
+        bool isSeparator = false;
+        bool disabled = false;
+    };
 
     struct HUDWidgetTemplate {
         std::string name;
@@ -201,6 +239,7 @@ namespace Lab {
         float defaultW, defaultH;
         Vec3 defaultColor;
         float defaultAlpha;
+        std::string defaultText;
     };
 
     // =========================================================================
@@ -220,159 +259,189 @@ namespace Lab {
 
         void handleKeyDown(int key, bool ctrl, bool shift);
 
-        // Window reference for file dialogs
         void setWindow(GLFWwindow* window) { _window = window; }
         GLFWwindow* getWindow() const { return _window; }
 
         bool requestExit() const { return _requestExit; }
         void clearRequestExit() { _requestExit = false; }
 
-        // Undo / Redo
         void pushUndoState();
         void undo();
         void redo();
 
     private:
-        // ---- Modes ----
+        // Modes & Tools
         HUDEditorMode _mode = HUDEditorMode::ProjectSelect;
         HUDEditorTool _currentTool = HUDEditorTool::Select;
         HUDEditorDropdown _activeDropdown = HUDEditorDropdown::None;
+        HUDSidebarTab _sidebarTab = HUDSidebarTab::Widgets;
 
-        // ---- Project ----
+        // Project
         HUDProject _project;
         std::string _projectFilePath;
         bool _projectDirty = false;
-        std::vector<std::string> _discoveredProjects; // .labhud file paths
+        std::vector<std::string> _discoveredProjects;
 
-        // ---- Selection ----
-        std::vector<int> _selectedIndices; // indices into _project.rootElements
-        int _hoveredIndex = -1;
+        // Selection & Hierarchy
+        ElementRef _selectedRef;
+        std::vector<ElementRef> _selectedRefs;
+        ElementRef _hoveredRef;
+
         bool _isDragging = false;
         bool _isResizing = false;
-        int _resizeHandle = -1; // 0-7: corners and edges
-        float _dragOffsetX = 0.0f, _dragOffsetY = 0.0f;
+        int _resizeHandle = -1; // 0-7
+        float _dragStartMouseCanvasX = 0.0f, _dragStartMouseCanvasY = 0.0f;
+        Vec2 _dragStartElemAbsPos{0.0f, 0.0f};
 
-        // ---- Marquee selection ----
+        // Marquee
         bool _isMarqueeSelecting = false;
         float _marqueeStartX = 0.0f, _marqueeStartY = 0.0f;
         float _marqueeEndX = 0.0f, _marqueeEndY = 0.0f;
 
-        // ---- Canvas ----
-        float _canvasZoom = 1.0f;
-        float _canvasPanX = 0.0f, _canvasPanY = 0.0f;
+        // Canvas Zoom & Pan
+        float _canvasZoom = 0.75f;
+        float _canvasPanX = 20.0f, _canvasPanY = 20.0f;
         float _gridSnap = 10.0f;
         bool _showGrid = true;
         bool _showGuides = true;
         bool _isPanning = false;
         float _panStartX = 0.0f, _panStartY = 0.0f;
         float _panStartCanvasX = 0.0f, _panStartCanvasY = 0.0f;
+        float _rmbPressStartX = 0.0f, _rmbPressStartY = 0.0f;
 
-        // Canvas viewport bounds (in screen space)
-        float _viewportX = 0.0f, _viewportY = 0.0f;
-        float _viewportW = 0.0f, _viewportH = 0.0f;
+        // Viewport bounds in screen space
+        float _viewportX = 260.0f, _viewportY = 76.0f;
+        float _viewportW = 960.0f, _viewportH = 796.0f;
 
-        // ---- Widget palette ----
+        // Widget Templates
         std::vector<HUDWidgetTemplate> _widgetTemplates;
         int _paletteHovered = -1;
-        bool _isDraggingFromPalette = false;
-        int _paletteDragIndex = -1;
         float _paletteScrollY = 0.0f;
+        float _hierarchyScrollY = 0.0f;
 
-        // ---- Property panel ----
-        int _activePropertySlider = -1;
-        int _propertyScrollY = 0;
+        // Property Panel State
+        float _propertyScrollY = 0.0f;
 
-        // ---- Asset browser ----
-        bool _assetBrowserOpen = false;
-        std::vector<std::string> _assetFiles; // files in assets/hud_assets/
-        int _assetBrowserHovered = -1;
-        float _assetBrowserScroll = 0.0f;
+        // Custom Assets
+        std::vector<std::string> _assetFiles;
+        float _assetScrollY = 0.0f;
         std::unordered_map<std::string, std::unique_ptr<Texture>> _assetTextures;
 
-        // ---- Undo/Redo ----
+        // Context Menu
+        bool _contextMenuOpen = false;
+        float _contextMenuX = 0.0f, _contextMenuY = 0.0f;
+        std::vector<ContextMenuItem> _contextMenuItems;
+
+        // In-Editor Modal (Text, Lua, Renaming)
+        ModalType _modalType = ModalType::None;
+        std::string _modalTitle;
+        std::string _modalPrompt;
+        std::string _modalBuffer;
+        std::function<void(const std::string&)> _modalOnConfirm;
+
+        // Undo / Redo
         struct EditorSnapshot {
             std::vector<HUDElement> elements;
         };
         std::vector<EditorSnapshot> _undoStack;
         std::vector<EditorSnapshot> _redoStack;
 
-        // ---- Console ----
+        // Logging & Diagnostics
         std::vector<std::string> _consoleLogs;
         void log(const std::string& msg);
 
-        // ---- Mouse state ----
+        // Mouse & Window State
         float _mouseX = 0.0f, _mouseY = 0.0f;
         float _lastMouseX = 0.0f, _lastMouseY = 0.0f;
         bool _lmbPressed = false, _lmbClicked = false;
-        bool _rmbPressed = false;
+        bool _rmbPressed = false, _rmbClicked = false;
         bool _lastLmb = false, _lastRmb = false;
         int _screenWidth = 1600, _screenHeight = 900;
-
-        // ---- Window / Exit ----
         GLFWwindow* _window = nullptr;
         bool _requestExit = false;
 
-        // ==== RENDERING ====
+        // Clipboard
+        std::unique_ptr<HUDElement> _clipboardElement;
 
-        // Project Selection Screen
+        // =====================================================================
+        // Rendering Functions
+        // =====================================================================
         void renderProjectSelect(int w, int h);
         void updateProjectSelect(float dt);
 
-        // Editor UI (Hammer style)
         void renderEditorUI(int w, int h);
         void renderTopMenuBar(float w);
         void renderToolbar(float w);
-        void renderWidgetPalette(float x, float y, float w, float h);
+        void renderLeftSidebar(float x, float y, float w, float h);
         void renderCanvas(float x, float y, float w, float h);
-        void renderPropertyPanel(float x, float y, float w, float h);
+        void renderRightPropertyPanel(float x, float y, float w, float h);
         void renderStatusBar(float w, float h);
         void renderDropdownMenus(float w, float h);
-        void renderAssetBrowser(float screenW, float screenH);
+        void renderContextMenu();
+        void renderModalDialog();
 
-        // Canvas element rendering
-        void renderHUDElement(const HUDElement& elem, float canvasX, float canvasY, float zoom, int index);
-        void renderSelectionHandles(const HUDElement& elem, float canvasX, float canvasY, float zoom);
-        void renderAlignmentGuides(float canvasX, float canvasY, float zoom);
-        void renderGrid(float x, float y, float w, float h, float canvasX, float canvasY, float zoom);
+        // Canvas Rendering Subsystems
+        void renderGrid(float vx, float vy, float vw, float vh);
+        void renderAlignmentGuides(float vx, float vy);
+        void renderHUDElementRecursive(const HUDElement& elem, const Vec2& parentAbsPos, float vx, float vy, const ElementRef& ref);
+        void renderSelectionOutlineAndHandles(const ElementRef& ref, float vx, float vy);
 
-        // UI Helpers (Hammer-style widgets replicating LabStudio look)
+        // Hammer UI Widgets
         bool drawHammerButton(float x, float y, float w, float h, const std::string& label, bool active = false, bool highlighted = false);
         bool drawHammerSlider(float x, float y, float w, float h, const std::string& label, float& value, float minVal, float maxVal, const std::string& format = "%.2f");
         void drawHammerPanel(float x, float y, float w, float h, const std::string& title = "");
         void drawHammerBevel(float x, float y, float w, float h, bool sunken = false);
-        bool drawHammerDropdownItem(float x, float y, float w, float h, const std::string& label, bool hovered);
+        bool drawHammerDropdownItem(float x, float y, float w, float h, const std::string& label, bool hovered, bool separator = false, bool disabled = false);
 
-        // Canvas coordinate conversions
+        // Coordinate System & Transformation Maths
         float screenToCanvasX(float sx) const;
         float screenToCanvasY(float sy) const;
         float canvasToScreenX(float cx) const;
         float canvasToScreenY(float cy) const;
         float snapToGrid(float v) const;
 
-        // Anchor resolution
-        Vec2 resolveAnchor(const HUDElement& elem) const;
+        // Hierarchical Geometry Calculation
+        Vec2 getElementAbsPos(const ElementRef& ref) const;
+        void setElementAbsPos(const ElementRef& ref, const Vec2& targetAbs);
+        Vec2 getElementSize(const ElementRef& ref) const;
 
-        // Hit-testing
-        int hitTestElement(float canvasX, float canvasY) const;
-        int hitTestResizeHandle(float canvasX, float canvasY, int elemIndex) const;
+        // Element Access & Mutators
+        HUDElement* getElement(const ElementRef& ref);
+        const HUDElement* getElement(const ElementRef& ref) const;
+        HUDElement* getParentElement(const ElementRef& ref);
 
-        // Element operations
-        void deleteSelectedElements();
-        void duplicateSelectedElements();
-        void moveSelectedZOrder(int delta);
-        void sortByZOrder();
-        int generateUniqueId();
+        // Hit Testing
+        ElementRef hitTest(float cx, float cy) const;
+        int hitTestResizeHandle(float cx, float cy, const ElementRef& ref) const;
 
-        // Palette
-        void initWidgetTemplates();
-        HUDElement createFromTemplate(int templateIndex, float x, float y) const;
+        // Element Management Operations
+        void deleteSelected();
+        void duplicateSelected();
+        void moveZOrder(int delta);
+        void sortRootByZOrder();
+        void selectElement(const ElementRef& ref, bool addToSelection = false);
+        void clearSelection();
+        bool isSelected(const ElementRef& ref) const;
 
-        // Asset scanning
+        // Context Menu Management
+        void openContextMenu(float sx, float sy, bool onElement, const ElementRef& targetRef);
+        void closeContextMenu();
+
+        // Modals
+        void openModal(ModalType type, const std::string& title, const std::string& prompt, const std::string& initialVal, std::function<void(const std::string&)> onConfirm);
+        void closeModal();
+
+        // Asset Management
         void scanAssets();
         void scanProjects();
+        void importCustomAsset();
         Texture* getAssetTexture(const std::string& path);
 
-        // Serialization helpers
+        // Palette Management
+        void initWidgetTemplates();
+        HUDElement createFromTemplate(int templateIndex, float absX, float absY) const;
+
+        // Project File Resolution
         static std::string resolveHUDPath(const std::string& path);
     };
 

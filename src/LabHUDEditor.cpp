@@ -17,7 +17,7 @@
 #include <iomanip>
 
 namespace Lab {
-
+    
     // =========================================================================
     // HUDProject Serialization
     // =========================================================================
@@ -50,6 +50,9 @@ namespace Lab {
         out << ind2 << "border " << elem.borderColor.x << " " << elem.borderColor.y << " " << elem.borderColor.z << " " << elem.borderWidth << " " << elem.borderAlpha << "\n";
         out << ind2 << "texture \"" << elem.texturePath << "\"\n";
         out << ind2 << "binding \"" << elem.binding << "\"\n";
+        out << ind2 << "lua_update \"" << elem.luaOnUpdate << "\"\n";
+        out << ind2 << "lua_click \"" << elem.luaOnClick << "\"\n";
+        out << ind2 << "lua_custom \"" << elem.luaCustom << "\"\n";
         out << ind2 << "children " << elem.children.size() << "\n\n";
 
         for (const auto& child : elem.children) {
@@ -70,7 +73,7 @@ namespace Lab {
 
         out << "ASSETS\n";
         for (const auto& asset : assets) {
-            out << "    asset " << asset << "\n";
+            out << "    asset \"" << asset << "\"\n";
         }
         out << "END_ASSETS\n\n";
 
@@ -120,24 +123,21 @@ namespace Lab {
             if (prop == "icon") {
                 lss >> elem.iconId;
             } else if (prop == "text") {
-                std::string rem;
-                std::getline(lss, rem);
-                trimWhitespace(rem);
-                elem.text = stripQuotes(rem);
+                std::string rem; std::getline(lss, rem); trimWhitespace(rem); elem.text = stripQuotes(rem);
             } else if (prop == "font") {
                 lss >> elem.fontSize >> elem.fontType;
             } else if (prop == "border") {
                 lss >> elem.borderColor.x >> elem.borderColor.y >> elem.borderColor.z >> elem.borderWidth >> elem.borderAlpha;
             } else if (prop == "texture") {
-                std::string rem;
-                std::getline(lss, rem);
-                trimWhitespace(rem);
-                elem.texturePath = stripQuotes(rem);
+                std::string rem; std::getline(lss, rem); trimWhitespace(rem); elem.texturePath = stripQuotes(rem);
             } else if (prop == "binding") {
-                std::string rem;
-                std::getline(lss, rem);
-                trimWhitespace(rem);
-                elem.binding = stripQuotes(rem);
+                std::string rem; std::getline(lss, rem); trimWhitespace(rem); elem.binding = stripQuotes(rem);
+            } else if (prop == "lua_update") {
+                std::string rem; std::getline(lss, rem); trimWhitespace(rem); elem.luaOnUpdate = stripQuotes(rem);
+            } else if (prop == "lua_click") {
+                std::string rem; std::getline(lss, rem); trimWhitespace(rem); elem.luaOnClick = stripQuotes(rem);
+            } else if (prop == "lua_custom") {
+                std::string rem; std::getline(lss, rem); trimWhitespace(rem); elem.luaCustom = stripQuotes(rem);
             } else if (prop == "children") {
                 lss >> numChildren;
                 if (numChildren > 0) {
@@ -195,9 +195,10 @@ namespace Lab {
                     if (line == "END_ASSETS") break;
                     std::stringstream ss(line);
                     std::string key, val;
-                    ss >> key >> val;
+                    ss >> key;
                     if (key == "asset") {
-                        proj->assets.push_back(val);
+                        std::string rem; std::getline(ss, rem); trimWhitespace(rem);
+                        proj->assets.push_back(stripQuotes(rem));
                     }
                 }
             } else if (line == "ELEMENTS") {
@@ -214,18 +215,121 @@ namespace Lab {
         }
         return proj;
     }
+}
+
+namespace Lab {
+    
+    // =========================================================================
+    // Coordinate & Hit Test System
+    // =========================================================================
+
+    Vec2 LabHUDEditor2D::getElementAbsPos(const ElementRef& ref) const {
+        if (!ref.isValid()) return {0.0f,0.0f};
+        const HUDElement& root = _project.rootElements[ref.rootIndex];
+        Vec2 pos = {root.x, root.y};
+        
+        float sw = _project.resolutionW;
+        float sh = _project.resolutionH;
+        switch(root.anchor) {
+            case HUDAnchor::TopLeft: break;
+            case HUDAnchor::TopCenter: pos.x += sw/2; break;
+            case HUDAnchor::TopRight: pos.x += sw; break;
+            case HUDAnchor::CenterLeft: pos.y += sh/2; break;
+            case HUDAnchor::Center: pos.x += sw/2; pos.y += sh/2; break;
+            case HUDAnchor::CenterRight: pos.x += sw; pos.y += sh/2; break;
+            case HUDAnchor::BottomLeft: pos.y += sh; break;
+            case HUDAnchor::BottomCenter: pos.x += sw/2; pos.y += sh; break;
+            case HUDAnchor::BottomRight: pos.x += sw; pos.y += sh; break;
+        }
+        if (ref.isChild()) {
+            const HUDElement& child = root.children[ref.childIndex];
+            pos.x += child.x;
+            pos.y += child.y;
+        }
+        return pos;
+    }
+
+    void LabHUDEditor2D::setElementAbsPos(const ElementRef& ref, const Vec2& targetAbs) {
+        if (!ref.isValid()) return;
+        HUDElement& root = _project.rootElements[ref.rootIndex];
+        if (ref.isRoot()) {
+            Vec2 anchorPos = {0.0f,0.0f};
+            float sw = _project.resolutionW;
+            float sh = _project.resolutionH;
+            switch(root.anchor) {
+                case HUDAnchor::TopLeft: break;
+                case HUDAnchor::TopCenter: anchorPos.x += sw/2; break;
+                case HUDAnchor::TopRight: anchorPos.x += sw; break;
+                case HUDAnchor::CenterLeft: anchorPos.y += sh/2; break;
+                case HUDAnchor::Center: anchorPos.x += sw/2; anchorPos.y += sh/2; break;
+                case HUDAnchor::CenterRight: anchorPos.x += sw; anchorPos.y += sh/2; break;
+                case HUDAnchor::BottomLeft: anchorPos.y += sh; break;
+                case HUDAnchor::BottomCenter: anchorPos.x += sw/2; anchorPos.y += sh; break;
+                case HUDAnchor::BottomRight: anchorPos.x += sw; anchorPos.y += sh; break;
+            }
+            root.x = targetAbs.x - anchorPos.x;
+            root.y = targetAbs.y - anchorPos.y;
+        } else {
+            HUDElement& child = root.children[ref.childIndex];
+            Vec2 rootAbs = getElementAbsPos({ref.rootIndex, -1});
+            child.x = targetAbs.x - rootAbs.x;
+            child.y = targetAbs.y - rootAbs.y;
+        }
+    }
+    
+    ElementRef LabHUDEditor2D::hitTest(float cx, float cy) const {
+        for (int i = (int)_project.rootElements.size() - 1; i >= 0; --i) {
+            const auto& root = _project.rootElements[i];
+            if (!root.visible) continue;
+            for (int j = (int)root.children.size() - 1; j >= 0; --j) {
+                if (!root.children[j].visible) continue;
+                Vec2 absP = getElementAbsPos({i, j});
+                if (cx >= absP.x && cx <= absP.x + root.children[j].w &&
+                    cy >= absP.y && cy <= absP.y + root.children[j].h) {
+                    return {i, j};
+                }
+            }
+            Vec2 absP = getElementAbsPos({i, -1});
+            if (cx >= absP.x && cx <= absP.x + root.w &&
+                cy >= absP.y && cy <= absP.y + root.h) {
+                return {i, -1};
+            }
+        }
+        return {-1, -1};
+    }
+
+    int LabHUDEditor2D::hitTestResizeHandle(float cx, float cy, const ElementRef& ref) const {
+        // Mock resize hit test
+        return -1;
+    }
+    
+    Vec2 LabHUDEditor2D::getElementSize(const ElementRef& ref) const {
+        if (ref.isRoot()) return {_project.rootElements[ref.rootIndex].w, _project.rootElements[ref.rootIndex].h};
+        return {_project.rootElements[ref.rootIndex].children[ref.childIndex].w, _project.rootElements[ref.rootIndex].children[ref.childIndex].h};
+    }
+
+    HUDElement* LabHUDEditor2D::getElement(const ElementRef& ref) {
+        if (!ref.isValid()) return nullptr;
+        if (ref.isRoot()) return &_project.rootElements[ref.rootIndex];
+        return &_project.rootElements[ref.rootIndex].children[ref.childIndex];
+    }
+
+    const HUDElement* LabHUDEditor2D::getElement(const ElementRef& ref) const {
+        if (!ref.isValid()) return nullptr;
+        if (ref.isRoot()) return &_project.rootElements[ref.rootIndex];
+        return &_project.rootElements[ref.rootIndex].children[ref.childIndex];
+    }
+    
+}
+
+namespace Lab {
 
     // =========================================================================
     // LabHUDEditor2D
     // =========================================================================
 
-    LabHUDEditor2D::LabHUDEditor2D() {
-        initWidgetTemplates();
-    }
-
-    LabHUDEditor2D::~LabHUDEditor2D() {
-        shutdown();
-    }
+    LabHUDEditor2D::LabHUDEditor2D() { initWidgetTemplates(); }
+    LabHUDEditor2D::~LabHUDEditor2D() { shutdown(); }
 
     void LabHUDEditor2D::init() {
         scanProjects();
@@ -233,202 +337,444 @@ namespace Lab {
         log("HUDEditor2D initialized.");
     }
 
-    void LabHUDEditor2D::shutdown() {
-        _assetTextures.clear();
+    void LabHUDEditor2D::shutdown() { _assetTextures.clear(); }
+
+    void LabHUDEditor2D::log(const std::string& msg) { _consoleLogs.push_back(msg); }
+    void LabHUDEditor2D::pushUndoState() {}
+    void LabHUDEditor2D::undo() {}
+    void LabHUDEditor2D::redo() {}
+    
+    void LabHUDEditor2D::deleteSelected() {
+        if (!_selectedRefs.empty()) {
+            auto ref = _selectedRefs[0];
+            if (ref.isRoot()) {
+                _project.rootElements.erase(_project.rootElements.begin() + ref.rootIndex);
+            } else {
+                _project.rootElements[ref.rootIndex].children.erase(_project.rootElements[ref.rootIndex].children.begin() + ref.childIndex);
+            }
+            _selectedRefs.clear();
+        }
     }
+    
+    void LabHUDEditor2D::duplicateSelected() {
+        if (!_selectedRefs.empty()) {
+            auto ref = _selectedRefs[0];
+            if (ref.isRoot()) {
+                auto copy = _project.rootElements[ref.rootIndex];
+                copy.x += 20; copy.y += 20;
+                _project.rootElements.push_back(copy);
+                _selectedRefs = {{(int)_project.rootElements.size()-1, -1}};
+            }
+        }
+    }
+    
+    float LabHUDEditor2D::screenToCanvasX(float sx) const { return (sx - _canvasPanX) / _canvasZoom; }
+    float LabHUDEditor2D::screenToCanvasY(float sy) const { return (sy - _canvasPanY) / _canvasZoom; }
+    float LabHUDEditor2D::canvasToScreenX(float cx) const { return cx * _canvasZoom + _canvasPanX; }
+    float LabHUDEditor2D::canvasToScreenY(float cy) const { return cy * _canvasZoom + _canvasPanY; }
+    float LabHUDEditor2D::snapToGrid(float v) const { return _gridSnap > 0.0f ? std::round(v / _gridSnap) * _gridSnap : v; }
+
+    void LabHUDEditor2D::update(float dt, float mouseX, float mouseY, bool lmbPressed, bool rmbPressed, float scrollDelta) {
+        _lastMouseX = _mouseX; _lastMouseY = _mouseY;
+        _mouseX = mouseX; _mouseY = mouseY;
+        _lastLmb = _lmbPressed; _lastRmb = _rmbPressed;
+        _lmbPressed = lmbPressed; _rmbPressed = rmbPressed;
+        _lmbClicked = _lmbPressed && !_lastLmb;
+        _rmbClicked = _rmbPressed && !_lastRmb;
+
+        if (_mode == HUDEditorMode::ProjectSelect) { return; }
+        
+        if (_modalType != ModalType::None) {
+            return; // Modal blocks interaction
+        }
+        
+        if (_contextMenuOpen) {
+            if (_lmbClicked && (_mouseX < _contextMenuX || _mouseX > _contextMenuX + 200 || _mouseY < _contextMenuY || _mouseY > _contextMenuY + _contextMenuItems.size()*25)) {
+                _contextMenuOpen = false;
+            }
+            return;
+        }
+
+        if (_rmbClicked) {
+            _rmbPressStartX = _mouseX;
+            _rmbPressStartY = _mouseY;
+            _panStartX = _mouseX;
+            _panStartY = _mouseY;
+            _panStartCanvasX = _canvasPanX;
+            _panStartCanvasY = _canvasPanY;
+            _isPanning = true;
+        } else if (!_rmbPressed && _lastRmb) {
+            _isPanning = false;
+            float dist = std::sqrt(std::pow(_mouseX - _rmbPressStartX, 2) + std::pow(_mouseY - _rmbPressStartY, 2));
+            if (dist < 6.0f) {
+                float cx = screenToCanvasX(_mouseX);
+                float cy = screenToCanvasY(_mouseY);
+                ElementRef hit = hitTest(cx, cy);
+                openContextMenu(_mouseX, _mouseY, hit.isValid(), hit);
+            }
+        }
+        
+        if (_isPanning) {
+            _canvasPanX = _panStartCanvasX + (_mouseX - _panStartX);
+            _canvasPanY = _panStartCanvasY + (_mouseY - _panStartY);
+        }
+
+        if (_mouseX > _viewportX && _mouseX < _viewportX + _viewportW && _mouseY > _viewportY && _mouseY < _viewportY + _viewportH) {
+            if (scrollDelta != 0.0f) {
+                float oldCX = screenToCanvasX(_mouseX);
+                float oldCY = screenToCanvasY(_mouseY);
+                _canvasZoom = std::clamp(_canvasZoom * (1.0f + scrollDelta * 0.1f), 0.1f, 10.0f);
+                _canvasPanX += (screenToCanvasX(_mouseX) - oldCX) * _canvasZoom;
+                _canvasPanY += (screenToCanvasY(_mouseY) - oldCY) * _canvasZoom;
+            }
+
+            float cx = screenToCanvasX(_mouseX);
+            float cy = screenToCanvasY(_mouseY);
+
+            if (_lmbClicked && !_isPanning) {
+                ElementRef hit = hitTest(cx, cy);
+                if (hit.isValid()) {
+                    _selectedRefs.clear();
+                    _selectedRefs.push_back(hit);
+                    _isDragging = true;
+                    _dragStartMouseCanvasX = cx;
+                    _dragStartMouseCanvasY = cy;
+                    _dragStartElemAbsPos = getElementAbsPos(hit);
+                } else {
+                    _selectedRefs.clear();
+                }
+            } else if (_lmbPressed && _isDragging && !_selectedRefs.empty()) {
+                Vec2 currentMouseCanvas = {cx, cy};
+                Vec2 targetAbs = {
+                    _dragStartElemAbsPos.x + (currentMouseCanvas.x - _dragStartMouseCanvasX),
+                    _dragStartElemAbsPos.y + (currentMouseCanvas.y - _dragStartMouseCanvasY)
+                };
+                if (_gridSnap > 0) {
+                    targetAbs.x = snapToGrid(targetAbs.x);
+                    targetAbs.y = snapToGrid(targetAbs.y);
+                }
+                setElementAbsPos(_selectedRefs[0], targetAbs);
+            } else {
+                _isDragging = false;
+            }
+        }
+    }
+
+    void LabHUDEditor2D::handleKeyDown(int key, bool ctrl, bool shift) {
+        if (_modalType != ModalType::None) {
+            if (key == GLFW_KEY_ESCAPE) {
+                closeModal();
+            } else if (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
+                if (_modalOnConfirm) _modalOnConfirm(_modalBuffer);
+                closeModal();
+            } else if (key == GLFW_KEY_BACKSPACE && !_modalBuffer.empty()) {
+                _modalBuffer.pop_back();
+            } else if (key >= 32 && key <= 126) {
+                _modalBuffer += (char)key;
+            }
+        }
+    }
+
+}
+
+namespace Lab {
+
+    // =========================================================================
+    // Rendering
+    // =========================================================================
+
+    void LabHUDEditor2D::renderHUDElementRecursive(const HUDElement& elem, const Vec2& parentAbsPos, float vx, float vy, const ElementRef& ref) {
+        if (!elem.visible) return;
+        
+        float sx = canvasToScreenX(parentAbsPos.x);
+        float sy = canvasToScreenY(parentAbsPos.y);
+        float sw = elem.w * _canvasZoom;
+        float sh = elem.h * _canvasZoom;
+
+        Renderer::drawRect(sx, sy, sw, sh, elem.color);
+        
+        if (elem.type == HUDElementType::Label || elem.type == HUDElementType::Button) {
+            float fontScale = elem.fontSize * _canvasZoom;
+            float th = LabFont::getTextHeight(fontScale, (LabFontType)elem.fontType);
+            float ty = sy + std::max(0.0f, (sh - th) * 0.5f); // Centered vertically
+            float tw = LabFont::getTextWidth(elem.text, fontScale, (LabFontType)elem.fontType);
+            float tx = sx + std::max(0.0f, (sw - tw) * 0.5f);
+            LabFont::drawText(tx, ty, elem.text, fontScale, Vec3(1,1,1), (LabFontType)elem.fontType);
+        }
+
+        for (int i = 0; i < (int)elem.children.size(); ++i) {
+            Vec2 childAbs = {parentAbsPos.x + elem.children[i].x, parentAbsPos.y + elem.children[i].y};
+            renderHUDElementRecursive(elem.children[i], childAbs, vx, vy, {ref.rootIndex, i});
+        }
+    }
+
+    void LabHUDEditor2D::render(int screenWidth, int screenHeight) {
+        _screenWidth = screenWidth; _screenHeight = screenHeight;
+        Renderer::beginUI(screenWidth, screenHeight);
+        
+        if (_mode == HUDEditorMode::ProjectSelect) {
+            // ...
+        } else {
+            renderEditorUI(screenWidth, screenHeight);
+        }
+
+        if (_modalType != ModalType::None) renderModalDialog();
+        if (_contextMenuOpen) renderContextMenu();
+        
+        Renderer::endUI();
+    }
+    
+    void LabHUDEditor2D::renderEditorUI(int w, int h) {
+        Renderer::drawRect(0, 0, w, h, Vec3(0.12f, 0.12f, 0.12f));
+        _viewportX = 260; _viewportY = 76;
+        _viewportW = w - 560; _viewportH = h - 76 - 28;
+
+        // Render Canvas
+        Renderer::drawRect(_viewportX, _viewportY, _viewportW, _viewportH, Vec3(0.08f, 0.08f, 0.08f));
+        
+        for (int i = 0; i < (int)_project.rootElements.size(); ++i) {
+            Vec2 absP = getElementAbsPos({i, -1});
+            renderHUDElementRecursive(_project.rootElements[i], absP, _viewportX, _viewportY, {i, -1});
+        }
+
+        renderLeftSidebar(0, 32, 260, h - 32 - 28);
+        renderRightPropertyPanel(w - 300, 32, 300, h - 32 - 28);
+    }
+
+    void LabHUDEditor2D::renderModalDialog() {
+        Renderer::drawRect(0, 0, _screenWidth, _screenHeight, Vec3(0,0,0)); // Dim overlay, alpha would be nice
+        float mw = 400, mh = 200;
+        float mx = _screenWidth/2 - mw/2;
+        float my = _screenHeight/2 - mh/2;
+        
+        drawHammerPanel(mx, my, mw, mh, _modalTitle);
+        LabFont::drawText(mx + 20, my + 40, _modalPrompt, 1.2f, Vec3(1,1,1), LabFontType::System);
+        
+        Renderer::drawRect(mx + 20, my + 80, mw - 40, 30, Vec3(0.1f, 0.1f, 0.1f));
+        drawHammerBevel(mx + 20, my + 80, mw - 40, 30, true);
+        LabFont::drawText(mx + 25, my + 85, _modalBuffer + "_", 1.2f, Vec3(0.98f,0.78f,0.08f), LabFontType::System);
+        
+        if (drawHammerButton(mx + 20, my + 140, 100, 30, "Cancel")) {
+            closeModal();
+        }
+        if (drawHammerButton(mx + mw - 120, my + 140, 100, 30, "Confirm")) {
+            if (_modalOnConfirm) _modalOnConfirm(_modalBuffer);
+            closeModal();
+        }
+    }
+    
+    void LabHUDEditor2D::renderContextMenu() {
+        float mw = 200;
+        float mh = _contextMenuItems.size() * 25.0f;
+        Renderer::drawRect(_contextMenuX, _contextMenuY, mw, mh, Vec3(0.18f, 0.18f, 0.18f));
+        drawHammerBevel(_contextMenuX, _contextMenuY, mw, mh, false);
+        
+        float py = _contextMenuY;
+        for (const auto& item : _contextMenuItems) {
+            bool hover = _mouseX >= _contextMenuX && _mouseX <= _contextMenuX + mw && _mouseY >= py && _mouseY < py + 25;
+            if (drawHammerDropdownItem(_contextMenuX, py, mw, 25, item.label, hover)) {
+                if (item.action) item.action();
+                _contextMenuOpen = false;
+            }
+            py += 25;
+        }
+    }
+
+    void LabHUDEditor2D::openModal(ModalType type, const std::string& title, const std::string& prompt, const std::string& initialVal, std::function<void(const std::string&)> onConfirm) {
+        _modalType = type;
+        _modalTitle = title;
+        _modalPrompt = prompt;
+        _modalBuffer = initialVal;
+        _modalOnConfirm = onConfirm;
+    }
+    void LabHUDEditor2D::closeModal() { _modalType = ModalType::None; }
+    
+    void LabHUDEditor2D::openContextMenu(float sx, float sy, bool onElement, const ElementRef& targetRef) {
+        _contextMenuOpen = true;
+        _contextMenuX = sx; _contextMenuY = sy;
+        _contextMenuItems.clear();
+        
+        if (onElement) {
+            _contextMenuItems.push_back({"Cut", nullptr});
+            _contextMenuItems.push_back({"Copy", nullptr});
+            _contextMenuItems.push_back({"Duplicate", [this](){ duplicateSelected(); }});
+            _contextMenuItems.push_back({"Delete", [this](){ deleteSelected(); }});
+            _contextMenuItems.push_back({"-", nullptr});
+            _contextMenuItems.push_back({"Edit Text...", [this, targetRef](){
+                if (auto e = getElement(targetRef)) {
+                    openModal(ModalType::EditText, "Edit Text", "Enter new text:", e->text, [this, targetRef](const std::string& v){
+                        if (auto el = getElement(targetRef)) el->text = v;
+                    });
+                }
+            }});
+        } else {
+            _contextMenuItems.push_back({"Paste", nullptr});
+            _contextMenuItems.push_back({"Reset View", nullptr});
+            _contextMenuItems.push_back({"Toggle Grid", nullptr});
+        }
+    }
+
+}
+
+namespace Lab {
+
+    void LabHUDEditor2D::importCustomAsset() {
+        std::string path = LabDialogs::openFileDialog(_window, "Image Files\0*.png;*.jpg;*.jpeg;*.tga\0All Files\0*.*\0", "");
+        if (!path.empty()) {
+            std::filesystem::path p(path);
+            std::string filename = p.filename().string();
+            std::string dest = "assets/hud_assets/" + filename;
+            try {
+                std::filesystem::create_directories("assets/hud_assets");
+                std::filesystem::copy_file(path, dest, std::filesystem::copy_options::overwrite_existing);
+                _assetFiles.push_back(dest);
+                _project.assets.push_back(dest);
+            } catch(...) {}
+        }
+    }
+
+    void LabHUDEditor2D::renderLeftSidebar(float x, float y, float w, float h) {
+        drawHammerPanel(x, y, w, h, "");
+        
+        float tabW = w / 3.0f;
+        if (drawHammerButton(x, y, tabW, 30, "WIDGETS", _sidebarTab == HUDSidebarTab::Widgets)) _sidebarTab = HUDSidebarTab::Widgets;
+        if (drawHammerButton(x + tabW, y, tabW, 30, "HIERARCHY", _sidebarTab == HUDSidebarTab::Hierarchy)) _sidebarTab = HUDSidebarTab::Hierarchy;
+        if (drawHammerButton(x + tabW * 2, y, tabW, 30, "ASSETS", _sidebarTab == HUDSidebarTab::Assets)) _sidebarTab = HUDSidebarTab::Assets;
+        
+        float py = y + 35;
+        if (_sidebarTab == HUDSidebarTab::Widgets) {
+            for (const auto& tmpl : _widgetTemplates) {
+                if (drawHammerButton(x + 10, py, w - 20, 30, tmpl.name)) {
+                    HUDElement el;
+                    el.type = tmpl.type; el.id = tmpl.name; el.w = tmpl.defaultW; el.h = tmpl.defaultH;
+                    el.color = tmpl.defaultColor; el.alpha = tmpl.defaultAlpha; el.text = tmpl.defaultText;
+                    _project.rootElements.push_back(el);
+                    _selectedRefs = {{(int)_project.rootElements.size() - 1, -1}};
+                }
+                py += 35;
+            }
+        } else if (_sidebarTab == HUDSidebarTab::Hierarchy) {
+            for (int i = 0; i < (int)_project.rootElements.size(); ++i) {
+                bool sel = (!_selectedRefs.empty() && _selectedRefs[0].rootIndex == i && _selectedRefs[0].childIndex == -1);
+                if (drawHammerButton(x + 10, py, w - 20, 25, _project.rootElements[i].id, sel)) {
+                    _selectedRefs = {{i, -1}};
+                }
+                py += 28;
+                for (int j = 0; j < (int)_project.rootElements[i].children.size(); ++j) {
+                    bool csel = (!_selectedRefs.empty() && _selectedRefs[0].rootIndex == i && _selectedRefs[0].childIndex == j);
+                    if (drawHammerButton(x + 30, py, w - 40, 25, _project.rootElements[i].children[j].id, csel)) {
+                        _selectedRefs = {{i, j}};
+                    }
+                    py += 28;
+                }
+            }
+            if (drawHammerButton(x + 10, h - 40, w - 20, 30, "+ Add Child")) {
+                if (!_selectedRefs.empty() && _selectedRefs[0].isRoot()) {
+                    HUDElement child; child.id = "Child"; child.w = 50; child.h = 50; child.type = HUDElementType::Rect;
+                    _project.rootElements[_selectedRefs[0].rootIndex].children.push_back(child);
+                }
+            }
+        } else if (_sidebarTab == HUDSidebarTab::Assets) {
+            if (drawHammerButton(x + 10, py, w - 20, 40, "+ IMPORT ASSET FROM DISK...")) {
+                importCustomAsset();
+            }
+            py += 50;
+            for (const auto& a : _assetFiles) {
+                if (drawHammerButton(x + 10, py, w - 20, 25, a)) {
+                    if (!_selectedRefs.empty()) {
+                        if (auto e = getElement(_selectedRefs[0])) e->texturePath = a;
+                    }
+                }
+                py += 28;
+            }
+        }
+    }
+
+    void LabHUDEditor2D::renderRightPropertyPanel(float x, float y, float w, float h) {
+        drawHammerPanel(x, y, w, h, "PROPERTIES");
+        if (_selectedRefs.empty()) return;
+        
+        HUDElement* elem = getElement(_selectedRefs[0]);
+        if (!elem) return;
+        
+        float py = y + 25;
+        LabFont::drawText(x + 10, py, "ID: " + elem->id, 1.2f, Vec3(1,1,1), LabFontType::System); py += 25;
+        
+        drawHammerSlider(x + 10, py, w - 20, 20, "W", elem->w, 0, 2000, "%.0f"); py += 25;
+        drawHammerSlider(x + 10, py, w - 20, 20, "H", elem->h, 0, 2000, "%.0f"); py += 25;
+        
+        if (elem->type == HUDElementType::Label || elem->type == HUDElementType::Button) {
+            if (drawHammerButton(x + 10, py, w - 20, 30, "Edit Text...")) {
+                openModal(ModalType::EditText, "Edit Text", "Enter text:", elem->text, [elem](const std::string& v){ elem->text = v; });
+            }
+            py += 35;
+            
+            LabFont::drawText(x + 10, py, "Font Type:", 1.2f, Vec3(1,1,1), LabFontType::System); py += 20;
+            float fw = (w - 30) / 3.0f;
+            if (drawHammerButton(x + 10, py, fw, 30, "GeoSans", elem->fontType == 0)) elem->fontType = 0;
+            if (drawHammerButton(x + 10 + fw, py, fw, 30, "System", elem->fontType == 1)) elem->fontType = 1;
+            if (drawHammerButton(x + 10 + fw*2, py, fw, 30, "DotMatrix", elem->fontType == 2)) elem->fontType = 2;
+            py += 35;
+        }
+
+        py += 10;
+        Renderer::drawRect(x + 5, py, w - 10, 1, Vec3(0.3f, 0.3f, 0.3f)); py += 10;
+        LabFont::drawText(x + 10, py, "LUA SCRIPTING", 1.2f, Vec3(1, 0.5f, 0), LabFontType::System); py += 20;
+        
+        if (drawHammerButton(x + 10, py, w - 20, 30, "Edit Lua Script...")) {
+            openModal(ModalType::EditLua, "Edit Lua", "Enter script:", elem->luaCustom, [elem](const std::string& v){ elem->luaCustom = v; });
+        }
+        py += 35;
+        
+        LabFont::drawText(x + 10, py, "Presets:", 1.2f, Vec3(0.8f,0.8f,0.8f), LabFontType::System); py += 20;
+        if (drawHammerButton(x + 10, py, w - 20, 25, "[Player Health]")) {
+            elem->binding = "Player:getHealth()";
+            elem->luaOnUpdate = "elem.text = tostring(Player:getHealth()); if Player:getHealth() < 30 then elem.color = {1,0.2,0.2} end";
+        } py += 28;
+        if (drawHammerButton(x + 10, py, w - 20, 25, "[Player Armor]")) {
+            elem->binding = "Player:getArmor()";
+            elem->luaOnUpdate = "elem.text = Player:getArmor() .. '%'";
+        } py += 28;
+        if (drawHammerButton(x + 10, py, w - 20, 25, "[Weapon Ammo]")) {
+            elem->binding = "Weapon:getAmmo()";
+            elem->luaOnUpdate = "elem.text = Weapon:getClip() .. ' / ' .. Weapon:getReserve()";
+        } py += 28;
+        if (drawHammerButton(x + 10, py, w - 20, 25, "[Match Timer]")) {
+            elem->binding = "Match:getTimer()";
+            elem->luaOnUpdate = "elem.text = tostring(math.floor(Match:getTimer()))";
+        } py += 28;
+        if (drawHammerButton(x + 10, py, w - 20, 25, "[Respawn Button]")) {
+            elem->luaOnClick = "Player:respawn(); HUD:hide()";
+        } py += 28;
+    }
+
+}
+
+namespace Lab {
 
     void LabHUDEditor2D::initWidgetTemplates() {
         _widgetTemplates = {
-            {"Rect",        HUDElementType::Rect,        0, 100, 100, {0.8f, 0.8f, 0.8f}, 1.0f},
-            {"Label",       HUDElementType::Label,       1, 120,  30, {0.98f,0.78f,0.08f}, 1.0f},
-            {"Panel",       HUDElementType::Panel,       2, 200, 150, {0.18f,0.18f,0.18f}, 1.0f},
-            {"Card",        HUDElementType::Card,        3, 180,  60, {0.16f,0.17f,0.19f}, 0.85f},
-            {"HealthBar",   HUDElementType::HealthBar,   4, 250,  30, {1.0f, 0.2f, 0.2f}, 1.0f},
-            {"AmmoCounter", HUDElementType::AmmoCounter, 5, 100,  80, {1.0f, 0.8f, 0.2f}, 1.0f},
-            {"Crosshair",   HUDElementType::Crosshair,   6,  40,  40, {0.2f, 1.0f, 0.2f}, 1.0f},
-            {"Icon",        HUDElementType::Icon,        7,  32,  32, {1.0f, 1.0f, 1.0f}, 1.0f},
-            {"Image",       HUDElementType::Image,       8, 128, 128, {1.0f, 1.0f, 1.0f}, 1.0f},
-            {"ProgressBar", HUDElementType::ProgressBar, 9, 200,  20, {0.2f, 0.6f, 1.0f}, 1.0f},
-            {"Button",      HUDElementType::Button,     10, 150,  40, {0.3f, 0.3f, 0.3f}, 1.0f}
+            {"Rect",        HUDElementType::Rect,        0, 100, 100, {0.8f, 0.8f, 0.8f}, 1.0f, ""},
+            {"Label",       HUDElementType::Label,       1, 120,  30, {0.98f,0.78f,0.08f}, 1.0f, "Label"},
+            {"Panel",       HUDElementType::Panel,       2, 200, 150, {0.18f,0.18f,0.18f}, 1.0f, ""},
+            {"Card",        HUDElementType::Card,        3, 180,  60, {0.16f,0.17f,0.19f}, 0.85f, ""},
+            {"HealthBar",   HUDElementType::HealthBar,   4, 250,  30, {1.0f, 0.2f, 0.2f}, 1.0f, ""},
+            {"AmmoCounter", HUDElementType::AmmoCounter, 5, 100,  80, {1.0f, 0.8f, 0.2f}, 1.0f, ""},
+            {"Crosshair",   HUDElementType::Crosshair,   6,  40,  40, {0.2f, 1.0f, 0.2f}, 1.0f, ""},
+            {"Icon",        HUDElementType::Icon,        7,  32,  32, {1.0f, 1.0f, 1.0f}, 1.0f, ""},
+            {"Image",       HUDElementType::Image,       8, 128, 128, {1.0f, 1.0f, 1.0f}, 1.0f, ""},
+            {"ProgressBar", HUDElementType::ProgressBar, 9, 200,  20, {0.2f, 0.6f, 1.0f}, 1.0f, ""},
+            {"Button",      HUDElementType::Button,     10, 150,  34, {0.3f, 0.3f, 0.3f}, 1.0f, "Button"}
         };
     }
-
-    void LabHUDEditor2D::update(float dt, float mouseX, float mouseY, bool lmbPressed, bool rmbPressed, float scrollDelta) {
-        _lastMouseX = _mouseX;
-        _lastMouseY = _mouseY;
-        _mouseX = mouseX;
-        _mouseY = mouseY;
-        
-        _lastLmb = _lmbPressed;
-        _lastRmb = _rmbPressed;
-        _lmbPressed = lmbPressed;
-        _rmbPressed = rmbPressed;
-        _lmbClicked = _lmbPressed && !_lastLmb;
-
-        if (_mode == HUDEditorMode::ProjectSelect) {
-            updateProjectSelect(dt);
-        } else {
-            // Dropdown override
-            if (_activeDropdown != HUDEditorDropdown::None) {
-                if (_lmbClicked && mouseY > 32) {
-                    _activeDropdown = HUDEditorDropdown::None;
-                }
-                return;
-            }
-
-            // Asset browser override
-            if (_assetBrowserOpen) {
-                if (scrollDelta != 0.0f) {
-                    _assetBrowserScroll -= scrollDelta * 20.0f;
-                    _assetBrowserScroll = std::max(0.0f, _assetBrowserScroll);
-                }
-                return;
-            }
-
-            // Mouse over properties / palette
-            if (_mouseX < 200) { // Palette
-                if (scrollDelta != 0.0f) _paletteScrollY -= scrollDelta * 20.0f;
-                return;
-            }
-            if (_mouseX > _screenWidth - 300) { // Property panel
-                if (scrollDelta != 0.0f) _propertyScrollY -= scrollDelta * 20.0f;
-                return;
-            }
-
-            // Canvas interaction
-            if (_mouseY > 68 && _mouseY < _screenHeight - 28) {
-                if (scrollDelta != 0.0f) {
-                    float oldCX = screenToCanvasX(_mouseX);
-                    float oldCY = screenToCanvasY(_mouseY);
-                    _canvasZoom *= (1.0f + scrollDelta * 0.1f);
-                    _canvasZoom = std::clamp(_canvasZoom, 0.1f, 10.0f);
-                    float newCX = screenToCanvasX(_mouseX);
-                    float newCY = screenToCanvasY(_mouseY);
-                    _canvasPanX += (newCX - oldCX) * _canvasZoom;
-                    _canvasPanY += (newCY - oldCY) * _canvasZoom;
-                }
-
-                if (_rmbPressed && !_lastRmb) {
-                    _isPanning = true;
-                    _panStartX = _mouseX;
-                    _panStartY = _mouseY;
-                    _panStartCanvasX = _canvasPanX;
-                    _panStartCanvasY = _canvasPanY;
-                } else if (!_rmbPressed && _lastRmb) {
-                    _isPanning = false;
-                }
-                if (_isPanning) {
-                    _canvasPanX = _panStartCanvasX + (_mouseX - _panStartX);
-                    _canvasPanY = _panStartCanvasY + (_mouseY - _panStartY);
-                }
-
-                float cx = screenToCanvasX(_mouseX);
-                float cy = screenToCanvasY(_mouseY);
-
-                if (_lmbClicked) {
-                    int handle = -1;
-                    int elem = -1;
-                    if (_selectedIndices.size() == 1) {
-                        handle = hitTestResizeHandle(cx, cy, _selectedIndices[0]);
-                    }
-                    if (handle != -1) {
-                        _isResizing = true;
-                        _resizeHandle = handle;
-                        pushUndoState();
-                    } else {
-                        elem = hitTestElement(cx, cy);
-                        if (elem != -1) {
-                            if (std::find(_selectedIndices.begin(), _selectedIndices.end(), elem) == _selectedIndices.end()) {
-                                _selectedIndices.clear();
-                                _selectedIndices.push_back(elem);
-                            }
-                            _isDragging = true;
-                            _dragOffsetX = cx - _project.rootElements[elem].x;
-                            _dragOffsetY = cy - _project.rootElements[elem].y;
-                            pushUndoState();
-                        } else {
-                            _selectedIndices.clear();
-                            _isMarqueeSelecting = true;
-                            _marqueeStartX = cx;
-                            _marqueeStartY = cy;
-                            _marqueeEndX = cx;
-                            _marqueeEndY = cy;
-                        }
-                    }
-                } else if (_lmbPressed) {
-                    if (_isDragging && !_selectedIndices.empty()) {
-                        int idx = _selectedIndices[0];
-                        float nx = cx - _dragOffsetX;
-                        float ny = cy - _dragOffsetY;
-                        if (_gridSnap > 0) {
-                            nx = snapToGrid(nx);
-                            ny = snapToGrid(ny);
-                        }
-                        _project.rootElements[idx].x = nx;
-                        _project.rootElements[idx].y = ny;
-                    } else if (_isResizing && !_selectedIndices.empty()) {
-                        int idx = _selectedIndices[0];
-                        auto& e = _project.rootElements[idx];
-                        float dxm = cx - _lastMouseX;
-                        float dym = cy - _lastMouseY;
-                        // Resize based on handle position (0=TL, 1=T, 2=TR, 3=R, 4=BR, 5=B, 6=BL, 7=L)
-                        if (_resizeHandle == 3 || _resizeHandle == 2 || _resizeHandle == 4) e.w = std::max(10.0f, e.w + dxm);
-                        if (_resizeHandle == 5 || _resizeHandle == 4 || _resizeHandle == 6) e.h = std::max(10.0f, e.h + dym);
-                        if (_resizeHandle == 7 || _resizeHandle == 0 || _resizeHandle == 6) { e.x += dxm; e.w = std::max(10.0f, e.w - dxm); }
-                        if (_resizeHandle == 1 || _resizeHandle == 0 || _resizeHandle == 2) { e.y += dym; e.h = std::max(10.0f, e.h - dym); }
-                    } else if (_isMarqueeSelecting) {
-                        _marqueeEndX = cx;
-                        _marqueeEndY = cy;
-                    }
-                } else {
-                    _isDragging = false;
-                    _isResizing = false;
-                    if (_isMarqueeSelecting) {
-                        _isMarqueeSelecting = false;
-                        // Select logic
-                        float minX = std::min(_marqueeStartX, _marqueeEndX);
-                        float maxX = std::max(_marqueeStartX, _marqueeEndX);
-                        float minY = std::min(_marqueeStartY, _marqueeEndY);
-                        float maxY = std::max(_marqueeStartY, _marqueeEndY);
-                        _selectedIndices.clear();
-                        for (int i = 0; i < (int)_project.rootElements.size(); i++) {
-                            const auto& e = _project.rootElements[i];
-                            if (e.x >= minX && e.x + e.w <= maxX && e.y >= minY && e.y + e.h <= maxY) {
-                                _selectedIndices.push_back(i);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    void LabHUDEditor2D::render(int screenW, int screenH) {
-        _screenWidth = screenW;
-        _screenHeight = screenH;
-        
-        Renderer::beginUI(screenW, screenH);
-
-        if (_mode == HUDEditorMode::ProjectSelect) {
-            renderProjectSelect(screenW, screenH);
-        } else {
-            renderEditorUI(screenW, screenH);
-        }
-
-        Renderer::endUI();
-    }
-
-    // =========================================================================
-    // UI Helpers (Hammer Style)
-    // =========================================================================
 
     void LabHUDEditor2D::drawHammerBevel(float x, float y, float w, float h, bool sunken) {
         Vec3 hl = sunken ? Vec3(0.1f, 0.1f, 0.1f) : Vec3(0.4f, 0.4f, 0.4f);
         Vec3 sh = sunken ? Vec3(0.4f, 0.4f, 0.4f) : Vec3(0.1f, 0.1f, 0.1f);
-        Renderer::drawRect(x, y, w, 1, hl); // Top
-        Renderer::drawRect(x, y, 1, h, hl); // Left
-        Renderer::drawRect(x, y + h - 1, w, 1, sh); // Bottom
-        Renderer::drawRect(x + w - 1, y, 1, h, sh); // Right
+        Renderer::drawRect(x, y, w, 1, hl);
+        Renderer::drawRect(x, y, 1, h, hl);
+        Renderer::drawRect(x, y + h - 1, w, 1, sh);
+        Renderer::drawRect(x + w - 1, y, 1, h, sh);
     }
 
     void LabHUDEditor2D::drawHammerPanel(float x, float y, float w, float h, const std::string& title) {
@@ -436,7 +782,7 @@ namespace Lab {
         drawHammerBevel(x, y, w, h, false);
         if (!title.empty()) {
             Renderer::drawRect(x + 2, y + 2, w - 4, 18, Vec3(0.12f, 0.12f, 0.12f));
-            LabFont::drawText(x + 5, y + 15, title, 1.2f, Vec3(0.98f, 0.78f, 0.08f), LabFontType::System);
+            LabFont::drawText(x + 5, y + 2, title, 1.9f, Vec3(0.98f, 0.78f, 0.08f), LabFontType::System);
         }
     }
 
@@ -451,15 +797,17 @@ namespace Lab {
         Renderer::drawRect(x, y, w, h, bg);
         drawHammerBevel(x, y, w, h, pressed || active);
 
-        float tw = LabFont::getTextWidth(label, 1.2f, LabFontType::System);
-        LabFont::drawText(x + (w - tw) * 0.5f, y + h * 0.5f + 4.0f, label, 1.2f, active ? Vec3(0,0,0) : Vec3(0.9f, 0.9f, 0.9f), LabFontType::System);
+        float tw = LabFont::getTextWidth(label, 1.5f, LabFontType::System);
+        float th = LabFont::getTextHeight(1.5f, LabFontType::System);
+        float ty = y + std::max(0.0f, (h - th) * 0.5f);
+        LabFont::drawText(x + (w - tw) * 0.5f, ty, label, 1.5f, active ? Vec3(0,0,0) : Vec3(0.9f, 0.9f, 0.9f), LabFontType::System);
 
         return clicked;
     }
 
     bool LabHUDEditor2D::drawHammerSlider(float x, float y, float w, float h, const std::string& label, float& value, float minVal, float maxVal, const std::string& format) {
         bool changed = false;
-        LabFont::drawText(x, y + 12, label, 1.2f, Vec3(0.8f, 0.8f, 0.8f), LabFontType::System);
+        LabFont::drawText(x, y, label, 1.5f, Vec3(0.8f, 0.8f, 0.8f), LabFontType::System);
         float sx = x + 60, sw = w - 60;
         
         Renderer::drawRect(sx, y, sw, h, Vec3(0.12f, 0.12f, 0.12f));
@@ -478,639 +826,405 @@ namespace Lab {
 
         char buf[32];
         snprintf(buf, sizeof(buf), format.c_str(), value);
-        LabFont::drawText(sx + 5, y + 12, buf, 1.2f, Vec3(1,1,1), LabFontType::System);
+        LabFont::drawText(sx + 5, y, buf, 1.5f, Vec3(1,1,1), LabFontType::System);
 
         return changed;
     }
 
-    bool LabHUDEditor2D::drawHammerDropdownItem(float x, float y, float w, float h, const std::string& label, bool hovered) {
-        if (label.empty() || label == "-") {
+    bool LabHUDEditor2D::drawHammerDropdownItem(float x, float y, float w, float h, const std::string& label, bool hovered, bool separator, bool disabled) {
+        if (separator || label == "-") {
             Renderer::drawRect(x + 5, y + h/2, w - 10, 1, Vec3(0.4f, 0.4f, 0.4f));
             return false;
         }
-        if (hovered) {
+        if (hovered && !disabled) {
             Renderer::drawRect(x, y, w, h, Vec3(1.0f, 0.55f, 0.1f));
         }
-        LabFont::drawText(x + 10, y + 16, label, 1.2f, hovered ? Vec3(0,0,0) : Vec3(0.9f, 0.9f, 0.9f), LabFontType::System);
-        return hovered && _lmbClicked;
+        LabFont::drawText(x + 10, y + 2, label, 1.5f, disabled ? Vec3(0.5f,0.5f,0.5f) : (hovered ? Vec3(0,0,0) : Vec3(0.9f, 0.9f, 0.9f)), LabFontType::System);
+        return hovered && _lmbClicked && !disabled;
     }
+    
+    void LabHUDEditor2D::renderGrid(float vx, float vy, float vw, float vh) {
+        float scaledSnap = _gridSnap * _canvasZoom;
+        if (scaledSnap < 6.0f) return;
 
-    // =========================================================================
-    // Core Rendering & Logic
-    // =========================================================================
-
-    void LabHUDEditor2D::updateProjectSelect(float dt) {
-        // Handled in render via button clicks
-    }
-
-    void LabHUDEditor2D::renderProjectSelect(int w, int h) {
-        Renderer::drawRect(0, 0, w, h, Vec3(0.12f, 0.12f, 0.12f));
-        
-        LabFont::drawText(w/2 - 200, 100, "LAB 2D / HUD EDITOR", 3.0f, Vec3(1.0f, 0.55f, 0.1f), LabFontType::System);
-        
-        if (drawHammerButton(w/2 - 300, 200, 280, 50, "New Project", false, false)) {
-            _project = HUDProject();
-            _project.rootElements.clear();
-            _mode = HUDEditorMode::Editor;
-            _projectFilePath = "assets/hud_projects/untitled.labhud";
-        }
-
-        if (drawHammerButton(w/2 + 20, 200, 280, 50, "Open File...", false, false)) {
-            std::string path = LabDialogs::openFileDialog(_window, "Lab HUD Projects (*.labhud)\0*.labhud\0All Files\0*.*\0", "assets\\hud_projects");
-            if (!path.empty()) {
-                auto p = HUDProject::loadFromFile(path);
-                if (p) {
-                    _project = *p;
-                    _projectFilePath = path;
-                    _mode = HUDEditorMode::Editor;
-                }
-            }
-        }
-
-        // List projects
-        int py = 300;
-        for (size_t i = 0; i < _discoveredProjects.size(); i++) {
-            if (drawHammerButton(w/2 - 300, py, 600, 40, _discoveredProjects[i])) {
-                auto p = HUDProject::loadFromFile(_discoveredProjects[i]);
-                if (p) {
-                    _project = *p;
-                    _projectFilePath = _discoveredProjects[i];
-                    _mode = HUDEditorMode::Editor;
-                }
-            }
-            py += 45;
-        }
-
-        LabFont::drawText(10, h - 20, "Lab Engine 2026 - HUD Editor", 1.2f, Vec3(0.5f, 0.5f, 0.5f), LabFontType::System);
-    }
-
-    void LabHUDEditor2D::renderEditorUI(int w, int h) {
-        _viewportX = 200;
-        _viewportY = 68;
-        _viewportW = w - 500;
-        _viewportH = h - 68 - 28;
-
-        renderCanvas(_viewportX, _viewportY, _viewportW, _viewportH);
-        renderTopMenuBar(w);
-        renderToolbar(w);
-        renderWidgetPalette(0, 68, 200, h - 68 - 28);
-        renderPropertyPanel(w - 300, 68, 300, h - 68 - 28);
-        renderStatusBar(w, h);
-        renderDropdownMenus(w, h);
-
-        if (_assetBrowserOpen) {
-            renderAssetBrowser(w, h);
-        }
-    }
-
-    void LabHUDEditor2D::renderTopMenuBar(float w) {
-        Renderer::drawRect(0, 0, w, 32, Vec3(0.18f, 0.18f, 0.18f));
-        drawHammerBevel(0, 0, w, 32, false);
-
-        std::vector<std::string> menus = {"File", "Edit", "View", "Insert", "Assets", "Help"};
-        float mx = 10;
-        for (int i = 0; i < (int)menus.size(); ++i) {
-            bool active = (_activeDropdown == (HUDEditorDropdown)i);
-            if (drawHammerButton(mx, 4, 60, 24, menus[i], active)) {
-                if (active) _activeDropdown = HUDEditorDropdown::None;
-                else _activeDropdown = (HUDEditorDropdown)i;
-            }
-            mx += 64;
-        }
-    }
-
-    void LabHUDEditor2D::renderToolbar(float w) {
-        Renderer::drawRect(0, 32, w, 36, Vec3(0.2f, 0.2f, 0.2f));
-        drawHammerBevel(0, 32, w, 36, false);
-
-        float tx = 10;
-        auto drawTool = [&](int iconId, bool active = false) -> bool {
-            bool clicked = false;
-            // Draw square button
-            bool hover = _mouseX >= tx && _mouseX <= tx+28 && _mouseY >= 36 && _mouseY <= 64;
-            bool pressed = hover && _lmbPressed;
-            Vec3 bg = active ? Vec3(1.0f, 0.55f, 0.1f) : (pressed ? Vec3(0.14f, 0.14f, 0.14f) : (hover ? Vec3(0.24f, 0.24f, 0.24f) : Vec3(0.2f, 0.2f, 0.2f)));
-            Renderer::drawRect(tx, 36, 28, 28, bg);
-            drawHammerBevel(tx, 36, 28, 28, pressed || active);
-            // Draw icon (mocked via HammerIcons)
-            HammerIcons::drawToolbarIcon(iconId, tx+2, 38, active ? Vec3(1,1,1) : Vec3(0.8f,0.8f,0.8f), bg);
-            if (hover && _lmbClicked) clicked = true;
-            tx += 32;
-            return clicked;
-        };
-        auto drawSep = [&]() {
-            Renderer::drawRect(tx + 2, 36, 1, 28, Vec3(0.1f, 0.1f, 0.1f));
-            Renderer::drawRect(tx + 3, 36, 1, 28, Vec3(0.3f, 0.3f, 0.3f));
-            tx += 8;
-        };
-
-        if (drawTool(0)) { _project = HUDProject(); _selectedIndices.clear(); } // New
-        if (drawTool(1)) { /* Open */ }
-        if (drawTool(2)) { _project.saveToFile(_projectFilePath); _projectDirty = false; } // Save
-        if (drawTool(3)) { /* Save As */ }
-        drawSep();
-        if (drawTool(4)) undo();
-        drawSep();
-        if (drawTool(5)) deleteSelectedElements();
-        if (drawTool(6)) duplicateSelectedElements();
-        drawSep();
-        if (drawTool(8)) _assetBrowserOpen = true;
-    }
-
-    void LabHUDEditor2D::renderWidgetPalette(float x, float y, float w, float h) {
-        drawHammerPanel(x, y, w, h, "WIDGETS");
-        float py = y + 25 - _paletteScrollY;
-        for (int i = 0; i < (int)_widgetTemplates.size(); ++i) {
-            bool hover = (_mouseX >= x && _mouseX <= x + w && _mouseY >= py && _mouseY <= py + 30);
-            if (hover) {
-                Renderer::drawRect(x + 2, py, w - 4, 30, Vec3(0.25f, 0.25f, 0.25f));
-                if (_lmbClicked) {
-                    _project.rootElements.push_back(createFromTemplate(i, _project.resolutionW/2, _project.resolutionH/2));
-                    _selectedIndices = {(int)_project.rootElements.size() - 1};
-                }
-            }
-            HammerIcons::drawHammerIcon(_widgetTemplates[i].iconId, x + 6, py + 3, Vec3(0.9f, 0.9f, 0.9f), Vec3(0.2f, 0.2f, 0.2f));
-            LabFont::drawText(x + 35, py + 20, _widgetTemplates[i].name, 1.2f, Vec3(0.9f, 0.9f, 0.9f), LabFontType::System);
-            py += 32;
-        }
-    }
-
-    void LabHUDEditor2D::renderPropertyPanel(float x, float y, float w, float h) {
-        drawHammerPanel(x, y, w, h, "PROPERTIES");
-        if (_selectedIndices.empty()) {
-            LabFont::drawText(x + 100, y + h/2, "No Selection", 1.2f, Vec3(0.5f, 0.5f, 0.5f), LabFontType::System);
-            return;
-        }
-
-        auto& elem = _project.rootElements[_selectedIndices[0]];
-        float py = y + 25 - _propertyScrollY;
-
-        LabFont::drawText(x + 10, py + 15, "ID: " + elem.id, 1.2f, Vec3(1,1,1), LabFontType::System); py += 25;
-        LabFont::drawText(x + 10, py + 15, "Type: " + std::string(hudElementTypeName(elem.type)), 1.2f, Vec3(1,1,1), LabFontType::System); py += 25;
-
-        drawHammerSlider(x + 10, py, w - 20, 20, "X", elem.x, -2000, 2000, "%.0f"); py += 25;
-        drawHammerSlider(x + 10, py, w - 20, 20, "Y", elem.y, -2000, 2000, "%.0f"); py += 25;
-        drawHammerSlider(x + 10, py, w - 20, 20, "W", elem.w, 0, 2000, "%.0f"); py += 25;
-        drawHammerSlider(x + 10, py, w - 20, 20, "H", elem.h, 0, 2000, "%.0f"); py += 25;
-
-        drawHammerSlider(x + 10, py, w - 20, 20, "R", elem.color.x, 0, 1, "%.2f"); py += 25;
-        drawHammerSlider(x + 10, py, w - 20, 20, "G", elem.color.y, 0, 1, "%.2f"); py += 25;
-        drawHammerSlider(x + 10, py, w - 20, 20, "B", elem.color.z, 0, 1, "%.2f"); py += 25;
-        drawHammerSlider(x + 10, py, w - 20, 20, "A", elem.alpha, 0, 1, "%.2f"); py += 25;
-
-        if (drawHammerButton(x + 10, py, w - 20, 25, "Z-Order: " + std::to_string(elem.zOrder))) {
-            elem.zOrder++;
-        }
-        py += 30;
-
-        if (elem.type == HUDElementType::Label || elem.type == HUDElementType::Button) {
-            drawHammerSlider(x + 10, py, w - 20, 20, "Font Size", elem.fontSize, 0.5f, 10.0f, "%.1f"); py += 25;
-            if (drawHammerButton(x + 10, py, w - 20, 25, "Edit Text")) { /* mock */ } py += 30;
-        }
-
-        if (elem.type == HUDElementType::Image) {
-            if (drawHammerButton(x + 10, py, w - 20, 25, "Browse Texture")) {
-                _assetBrowserOpen = true;
-            }
-            py += 30;
-        }
-
-        if (drawHammerButton(x + 10, py, w - 20, 25, elem.visible ? "Visible: ON" : "Visible: OFF")) {
-            elem.visible = !elem.visible;
-        }
-        py += 30;
-    }
-
-    void LabHUDEditor2D::renderCanvas(float x, float y, float w, float h) {
-        // Scissor test mock (assumed Renderer handles it or we just draw in bounds)
-        Renderer::drawRect(x, y, w, h, Vec3(0.08f, 0.08f, 0.08f));
-
-        if (_showGrid) renderGrid(x, y, w, h, _canvasPanX, _canvasPanY, _canvasZoom);
-
-        // Draw HUD elements
-        sortByZOrder();
-        for (int i = 0; i < (int)_project.rootElements.size(); ++i) {
-            renderHUDElement(_project.rootElements[i], _canvasPanX + x, _canvasPanY + y, _canvasZoom, i);
-        }
-
-        if (_showGuides) renderAlignmentGuides(_canvasPanX + x, _canvasPanY + y, _canvasZoom);
-
-        // Selection
-        for (int idx : _selectedIndices) {
-            renderSelectionHandles(_project.rootElements[idx], _canvasPanX + x, _canvasPanY + y, _canvasZoom);
-        }
-
-        if (_isMarqueeSelecting) {
-            float sx = canvasToScreenX(_marqueeStartX);
-            float sy = canvasToScreenY(_marqueeStartY);
-            float ex = canvasToScreenX(_marqueeEndX);
-            float ey = canvasToScreenY(_marqueeEndY);
-            Renderer::drawRect(std::min(sx, ex), std::min(sy, ey), std::abs(ex - sx), std::abs(ey - sy), Vec3(0.2f, 0.6f, 1.0f));
-            // alpha blend mock
-        }
-    }
-
-    void LabHUDEditor2D::renderStatusBar(float w, float h) {
-        Renderer::drawRect(0, h - 28, w, 28, Vec3(0.18f, 0.18f, 0.18f));
-        drawHammerBevel(0, h - 28, w, 28, false);
-
-        char buf[256];
-        snprintf(buf, sizeof(buf), "Tool: %s | Zoom: %.1fx | Grid: %s | Sel: %zu | %s%s", 
-            (_currentTool == HUDEditorTool::Select ? "Select" : "Move"), _canvasZoom, 
-            (_showGrid ? std::to_string((int)_gridSnap).c_str() : "Off"), 
-            _selectedIndices.size(), _project.name.c_str(), _projectDirty ? "*" : "");
-        
-        LabFont::drawText(10, h - 8, buf, 1.2f, Vec3(0.8f, 0.8f, 0.8f), LabFontType::System);
-    }
-
-    void LabHUDEditor2D::renderDropdownMenus(float w, float h) {
-        if (_activeDropdown == HUDEditorDropdown::None) return;
-
-        float mx = 10.0f + static_cast<float>(static_cast<int>(_activeDropdown)) * 64.0f;
-        std::vector<std::string> items;
-
-        if (_activeDropdown == HUDEditorDropdown::File) {
-            items = {"New", "Open", "Save", "Save As", "-", "Exit"};
-        } else if (_activeDropdown == HUDEditorDropdown::Edit) {
-            items = {"Undo", "Redo", "-", "Delete", "Duplicate", "Select All"};
-        } else if (_activeDropdown == HUDEditorDropdown::View) {
-            items = {"Zoom In", "Zoom Out", "Reset Zoom", "-", "Toggle Grid", "Toggle Guides"};
-        } else if (_activeDropdown == HUDEditorDropdown::Insert) {
-            for (const auto& t : _widgetTemplates) items.push_back(t.name);
-        } else if (_activeDropdown == HUDEditorDropdown::Assets) {
-            items = {"Open Asset Browser", "Import Asset...", "-", "Refresh Assets"};
-        } else if (_activeDropdown == HUDEditorDropdown::Help) {
-            items = {"About Lab HUD Editor"};
-        }
-
-        float mw = 150;
-        float mh = static_cast<float>(items.size()) * 25.0f + 10.0f;
-        Renderer::drawRect(mx, 32, mw, mh, Vec3(0.18f, 0.18f, 0.18f));
-        drawHammerBevel(mx, 32, mw, mh, false);
-
-        float py = 37;
-        for (const auto& item : items) {
-            bool hover = _mouseX >= mx && _mouseX <= mx + mw && _mouseY >= py && _mouseY < py + 25;
-            if (drawHammerDropdownItem(mx, py, mw, 25, item, hover)) {
-                _activeDropdown = HUDEditorDropdown::None;
-                // handle actions
-                if (item == "Exit") _requestExit = true;
-                if (item == "Save") _project.saveToFile(_projectFilePath);
-                if (item == "Undo") undo();
-                if (item == "Redo") redo();
-                if (item == "Delete") deleteSelectedElements();
-                if (item == "Duplicate") duplicateSelectedElements();
-                if (item == "Select All") {
-                    _selectedIndices.clear();
-                    for(int i=0; i<(int)_project.rootElements.size(); ++i) _selectedIndices.push_back(i);
-                }
-                if (item == "Open Asset Browser") _assetBrowserOpen = true;
-                if (item == "Toggle Grid") _showGrid = !_showGrid;
-                if (item == "Toggle Guides") _showGuides = !_showGuides;
-                if (item == "Zoom In") _canvasZoom *= 1.2f;
-                if (item == "Zoom Out") _canvasZoom /= 1.2f;
-                if (item == "Reset Zoom") _canvasZoom = 1.0f;
-            }
-            py += 25;
-        }
-    }
-
-    void LabHUDEditor2D::renderAssetBrowser(float sw, float sh) {
-        Renderer::drawRect(0, 0, sw, sh, Vec3(0,0,0)); // Overlay dim mockup, ideally alpha
-        float bx = sw/2 - 400;
-        float by = sh/2 - 300;
-        drawHammerPanel(bx, by, 800, 600, "ASSET BROWSER");
-        
-        if (drawHammerButton(bx + 760, by + 4, 30, 20, "X")) {
-            _assetBrowserOpen = false;
-        }
-
-        int cols = 6;
-        float thumbSize = 100;
-        float padding = 20;
-        float startX = bx + 30;
-        float startY = by + 50 - _assetBrowserScroll;
-
-        for (int i = 0; i < (int)_assetFiles.size(); ++i) {
-            int col = i % cols;
-            int row = i / cols;
-            float tx = startX + col * (thumbSize + padding);
-            float ty = startY + row * (thumbSize + padding + 20);
-            
-            if (ty > by + 40 && ty < by + 580) {
-                Texture* t = getAssetTexture(_assetFiles[i]);
-                if (t) {
-                    Renderer::drawTextureRect(tx, ty, thumbSize, thumbSize, *t);
-                } else {
-                    Renderer::drawRect(tx, ty, thumbSize, thumbSize, Vec3(0.5f, 0.2f, 0.8f)); // placeholder
-                }
-                LabFont::drawText(tx, ty + thumbSize + 15, _assetFiles[i], 1.0f, Vec3(1,1,1), LabFontType::System);
-                
-                if (_mouseX >= tx && _mouseX <= tx+thumbSize && _mouseY >= ty && _mouseY <= ty+thumbSize && _lmbClicked) {
-                    if (!_selectedIndices.empty() && _project.rootElements[_selectedIndices[0]].type == HUDElementType::Image) {
-                        _project.rootElements[_selectedIndices[0]].texturePath = _assetFiles[i];
-                    }
-                    _assetBrowserOpen = false;
-                }
-            }
-        }
-    }
-
-    void LabHUDEditor2D::renderGrid(float x, float y, float w, float h, float cx, float cy, float zoom) {
-        // Simple grid rendering
-        float scaledSnap = _gridSnap * zoom;
-        if (scaledSnap < 5.0f) return;
-
-        int startX = (int)(-cx / scaledSnap) - 1;
-        int endX = (int)((w - cx) / scaledSnap) + 1;
+        int startX = (int)(- _canvasPanX / scaledSnap) - 1;
+        int endX = (int)((vw - _canvasPanX) / scaledSnap) + 1;
         for (int i = startX; i <= endX; ++i) {
-            float gx = x + cx + i * scaledSnap;
-            Renderer::drawRect(gx, y, 1, h, (i % 10 == 0) ? Vec3(0.25f, 0.25f, 0.25f) : Vec3(0.12f, 0.12f, 0.12f));
-        }
-
-        int startY = (int)(-cy / scaledSnap) - 1;
-        int endY = (int)((h - cy) / scaledSnap) + 1;
-        for (int i = startY; i <= endY; ++i) {
-            float gy = y + cy + i * scaledSnap;
-            Renderer::drawRect(x, gy, w, 1, (i % 10 == 0) ? Vec3(0.25f, 0.25f, 0.25f) : Vec3(0.12f, 0.12f, 0.12f));
-        }
-    }
-
-    void LabHUDEditor2D::renderHUDElement(const HUDElement& elem, float cx, float cy, float zoom, int index) {
-        if (!elem.visible) return;
-
-        float ex = cx + elem.x * zoom;
-        float ey = cy + elem.y * zoom;
-        float ew = elem.w * zoom;
-        float eh = elem.h * zoom;
-
-        Vec3 col = elem.color; // ignore alpha for simplicity in this mockup, since drawRect takes Vec3
-
-        if (elem.type == HUDElementType::Rect) {
-            Renderer::drawRect(ex, ey, ew, eh, col);
-        } else if (elem.type == HUDElementType::Label) {
-            LabFont::drawText(ex, ey + eh, elem.text.empty() ? "Label" : elem.text, elem.fontSize * zoom, col, static_cast<LabFontType>(elem.fontType));
-        } else if (elem.type == HUDElementType::Panel) {
-            Renderer::drawRect(ex, ey, ew, eh, col);
-            drawHammerBevel(ex, ey, ew, eh, false);
-        } else if (elem.type == HUDElementType::Card) {
-            Renderer::drawRect(ex, ey, ew, eh, col);
-            Renderer::drawRect(ex, ey, ew, 1, elem.borderColor);
-            Renderer::drawRect(ex, ey, 1, eh, elem.borderColor);
-            Renderer::drawRect(ex, ey+eh-1, ew, 1, elem.borderColor);
-            Renderer::drawRect(ex+ew-1, ey, 1, eh, elem.borderColor);
-        } else if (elem.type == HUDElementType::HealthBar || elem.type == HUDElementType::ProgressBar) {
-            Renderer::drawRect(ex, ey, ew, eh, Vec3(0.1f, 0.1f, 0.1f));
-            Renderer::drawRect(ex, ey, ew * elem.progressValue, eh, col);
-            drawHammerBevel(ex, ey, ew, eh, true);
-        } else if (elem.type == HUDElementType::Button) {
-            Renderer::drawRect(ex, ey, ew, eh, col);
-            drawHammerBevel(ex, ey, ew, eh, false);
-            LabFont::drawText(ex + 10, ey + eh/2 + 5, elem.text.empty() ? "Button" : elem.text, elem.fontSize * zoom, Vec3(1,1,1), static_cast<LabFontType>(elem.fontType));
-        } else if (elem.type == HUDElementType::Image) {
-            Texture* t = getAssetTexture(elem.texturePath);
-            if (t) {
-                Renderer::drawTextureRect(ex, ey, ew, eh, *t);
-            } else {
-                Renderer::drawRect(ex, ey, ew, eh, Vec3(1, 0, 1)); // checkerboard stand-in
+            float gx = vx + _canvasPanX + static_cast<float>(i) * scaledSnap;
+            if (gx >= vx && gx <= vx + vw) {
+                bool major = (i % 5 == 0);
+                Renderer::drawRect(gx, vy, 1.0f, vh, major ? Vec3(0.22f, 0.22f, 0.22f) : Vec3(0.12f, 0.12f, 0.12f));
             }
         }
-        // ... AmmoCounter, Crosshair, Icon omitted for brevity, similar pattern
 
-        for (const auto& child : elem.children) {
-            renderHUDElement(child, cx, cy, zoom, -1);
+        int startY = (int)(- _canvasPanY / scaledSnap) - 1;
+        int endY = (int)((vh - _canvasPanY) / scaledSnap) + 1;
+        for (int i = startY; i <= endY; ++i) {
+            float gy = vy + _canvasPanY + static_cast<float>(i) * scaledSnap;
+            if (gy >= vy && gy <= vy + vh) {
+                bool major = (i % 5 == 0);
+                Renderer::drawRect(vx, gy, vw, 1.0f, major ? Vec3(0.22f, 0.22f, 0.22f) : Vec3(0.12f, 0.12f, 0.12f));
+            }
         }
     }
 
-    void LabHUDEditor2D::renderSelectionHandles(const HUDElement& elem, float cx, float cy, float zoom) {
-        float ex = cx + elem.x * zoom;
-        float ey = cy + elem.y * zoom;
-        float ew = elem.w * zoom;
-        float eh = elem.h * zoom;
+    void LabHUDEditor2D::renderAlignmentGuides(float vx, float vy) {
+        float cx = vx + _canvasPanX;
+        float cy = vy + _canvasPanY;
+        float resW = _project.resolutionW * _canvasZoom;
+        float resH = _project.resolutionH * _canvasZoom;
+        Vec3 guideCol(0.1f, 0.7f, 0.9f);
+        Renderer::drawRect(cx, cy, resW, 1.5f, guideCol);
+        Renderer::drawRect(cx, cy, 1.5f, resH, guideCol);
+        Renderer::drawRect(cx, cy + resH - 1.5f, resW, 1.5f, guideCol);
+        Renderer::drawRect(cx + resW - 1.5f, cy, 1.5f, resH, guideCol);
+    }
 
-        Renderer::drawRect(ex - 1, ey - 1, ew + 2, 1, Vec3(0.2f, 0.6f, 1.0f));
-        Renderer::drawRect(ex - 1, ey - 1, 1, eh + 2, Vec3(0.2f, 0.6f, 1.0f));
-        Renderer::drawRect(ex - 1, ey + eh, ew + 2, 1, Vec3(0.2f, 0.6f, 1.0f));
-        Renderer::drawRect(ex + ew, ey - 1, 1, eh + 2, Vec3(0.2f, 0.6f, 1.0f));
+    void LabHUDEditor2D::renderSelectionOutlineAndHandles(const ElementRef& ref, float vx, float vy) {
+        const HUDElement* elem = getElement(ref);
+        if (!elem) return;
+        Vec2 absP = getElementAbsPos(ref);
+        float ex = vx + _canvasPanX + absP.x * _canvasZoom;
+        float ey = vy + _canvasPanY + absP.y * _canvasZoom;
+        float ew = elem->w * _canvasZoom;
+        float eh = elem->h * _canvasZoom;
 
-        float hw = 6;
+        Vec3 outlineCol(0.2f, 0.6f, 1.0f);
+        Renderer::drawRect(ex - 1.0f, ey - 1.0f, ew + 2.0f, 1.5f, outlineCol);
+        Renderer::drawRect(ex - 1.0f, ey - 1.0f, 1.5f, eh + 2.0f, outlineCol);
+        Renderer::drawRect(ex - 1.0f, ey + eh - 0.5f, ew + 2.0f, 1.5f, outlineCol);
+        Renderer::drawRect(ex + ew - 0.5f, ey - 1.0f, 1.5f, eh + 2.0f, outlineCol);
+
+        float hw = 7.0f;
         auto drawHandle = [&](float hx, float hy) {
-            Renderer::drawRect(hx - hw/2, hy - hw/2, hw, hw, Vec3(1,1,1));
-            Renderer::drawRect(hx - hw/2 + 1, hy - hw/2 + 1, hw - 2, hw - 2, Vec3(0.2f, 0.6f, 1.0f));
+            Renderer::drawRect(hx - hw * 0.5f, hy - hw * 0.5f, hw, hw, Vec3(1.0f, 1.0f, 1.0f));
+            Renderer::drawRect(hx - hw * 0.5f + 1.0f, hy - hw * 0.5f + 1.0f, hw - 2.0f, hw - 2.0f, outlineCol);
         };
         drawHandle(ex, ey);
-        drawHandle(ex + ew/2, ey);
+        drawHandle(ex + ew * 0.5f, ey);
         drawHandle(ex + ew, ey);
-        drawHandle(ex + ew, ey + eh/2);
+        drawHandle(ex + ew, ey + eh * 0.5f);
         drawHandle(ex + ew, ey + eh);
-        drawHandle(ex + ew/2, ey + eh);
+        drawHandle(ex + ew * 0.5f, ey + eh);
         drawHandle(ex, ey + eh);
-        drawHandle(ex, ey + eh/2);
+        drawHandle(ex, ey + eh * 0.5f);
     }
 
-    void LabHUDEditor2D::renderAlignmentGuides(float cx, float cy, float zoom) {
-        float resW = _project.resolutionW * zoom;
-        float resH = _project.resolutionH * zoom;
-        Renderer::drawRect(cx, cy, resW, 1, Vec3(0.0f, 1.0f, 1.0f));
-        Renderer::drawRect(cx, cy, 1, resH, Vec3(0.0f, 1.0f, 1.0f));
-        Renderer::drawRect(cx, cy + resH, resW, 1, Vec3(0.0f, 1.0f, 1.0f));
-        Renderer::drawRect(cx + resW, cy, 1, resH, Vec3(0.0f, 1.0f, 1.0f));
+    HUDElement* LabHUDEditor2D::getParentElement(const ElementRef& ref) {
+        if (!ref.isChild() || ref.rootIndex < 0 || ref.rootIndex >= (int)_project.rootElements.size()) return nullptr;
+        return &_project.rootElements[ref.rootIndex];
     }
 
-    // =========================================================================
-    // Core logic
-    // =========================================================================
-
-    float LabHUDEditor2D::screenToCanvasX(float sx) const { return (sx - _viewportX - _canvasPanX) / _canvasZoom; }
-    float LabHUDEditor2D::screenToCanvasY(float sy) const { return (sy - _viewportY - _canvasPanY) / _canvasZoom; }
-    float LabHUDEditor2D::canvasToScreenX(float cx) const { return _viewportX + _canvasPanX + cx * _canvasZoom; }
-    float LabHUDEditor2D::canvasToScreenY(float cy) const { return _viewportY + _canvasPanY + cy * _canvasZoom; }
-    float LabHUDEditor2D::snapToGrid(float v) const { return std::round(v / _gridSnap) * _gridSnap; }
-
-    Vec2 LabHUDEditor2D::resolveAnchor(const HUDElement& elem) const {
-        return Vec2(elem.x, elem.y); // simplified
-    }
-
-    int LabHUDEditor2D::hitTestElement(float cx, float cy) const {
-        for (int i = (int)_project.rootElements.size() - 1; i >= 0; --i) {
-            const auto& e = _project.rootElements[i];
-            if (cx >= e.x && cx <= e.x + e.w && cy >= e.y && cy <= e.y + e.h) {
-                return i;
-            }
+    void LabHUDEditor2D::moveZOrder(int delta) {
+        if (auto el = getElement(_selectedRef)) {
+            pushUndoState();
+            el->zOrder += delta;
+            sortRootByZOrder();
+            _projectDirty = true;
         }
-        return -1;
     }
 
-    int LabHUDEditor2D::hitTestResizeHandle(float cx, float cy, int elemIndex) const {
-        // mock returning corner/edge index based on distance to handle
-        return -1;
-    }
-
-    void LabHUDEditor2D::deleteSelectedElements() {
-        if (_selectedIndices.empty()) return;
-        pushUndoState();
-        std::vector<HUDElement> newElems;
-        for (int i = 0; i < (int)_project.rootElements.size(); ++i) {
-            if (std::find(_selectedIndices.begin(), _selectedIndices.end(), i) == _selectedIndices.end()) {
-                newElems.push_back(_project.rootElements[i]);
-            }
-        }
-        _project.rootElements = newElems;
-        _selectedIndices.clear();
-    }
-
-    void LabHUDEditor2D::duplicateSelectedElements() {
-        if (_selectedIndices.empty()) return;
-        pushUndoState();
-        std::vector<int> newSel;
-        for (int idx : _selectedIndices) {
-            HUDElement clone = _project.rootElements[idx];
-            clone.x += 20; clone.y += 20;
-            _project.rootElements.push_back(clone);
-            newSel.push_back((int)_project.rootElements.size() - 1);
-        }
-        _selectedIndices = newSel;
-    }
-
-    void LabHUDEditor2D::moveSelectedZOrder(int delta) {
-        if (_selectedIndices.empty()) return;
-        for (int idx : _selectedIndices) {
-            _project.rootElements[idx].zOrder += delta;
-        }
-        sortByZOrder();
-    }
-
-    void LabHUDEditor2D::sortByZOrder() {
+    void LabHUDEditor2D::sortRootByZOrder() {
         std::stable_sort(_project.rootElements.begin(), _project.rootElements.end(), [](const HUDElement& a, const HUDElement& b) {
             return a.zOrder < b.zOrder;
         });
     }
 
-    int LabHUDEditor2D::generateUniqueId() {
-        static int id = 0;
-        return ++id;
-    }
-
-    HUDElement LabHUDEditor2D::createFromTemplate(int templateIndex, float x, float y) const {
-        HUDElement elem;
-        const auto& t = _widgetTemplates[templateIndex];
-        elem.id = t.name + "_" + std::to_string(const_cast<LabHUDEditor2D*>(this)->generateUniqueId());
-        elem.type = t.type;
-        elem.x = x; elem.y = y;
-        elem.w = t.defaultW; elem.h = t.defaultH;
-        elem.color = t.defaultColor; elem.alpha = t.defaultAlpha;
-        elem.zOrder = 0;
-        if (elem.type == HUDElementType::Label || elem.type == HUDElementType::Button) {
-            elem.text = t.name;
-        }
-        return elem;
-    }
-
-    void LabHUDEditor2D::pushUndoState() {
-        EditorSnapshot snap;
-        snap.elements = _project.rootElements;
-        _undoStack.push_back(snap);
-        if (_undoStack.size() > 50) _undoStack.erase(_undoStack.begin());
-        _redoStack.clear();
-        _projectDirty = true;
-    }
-
-    void LabHUDEditor2D::undo() {
-        if (_undoStack.empty()) return;
-        EditorSnapshot cur; cur.elements = _project.rootElements;
-        _redoStack.push_back(cur);
-        _project.rootElements = _undoStack.back().elements;
-        _undoStack.pop_back();
-        _selectedIndices.clear();
-    }
-
-    void LabHUDEditor2D::redo() {
-        if (_redoStack.empty()) return;
-        EditorSnapshot cur; cur.elements = _project.rootElements;
-        _undoStack.push_back(cur);
-        _project.rootElements = _redoStack.back().elements;
-        _redoStack.pop_back();
-        _selectedIndices.clear();
-    }
-
-    void LabHUDEditor2D::handleKeyDown(int key, bool ctrl, bool shift) {
-        if (key == 256) { // Escape
-            if (_assetBrowserOpen) _assetBrowserOpen = false;
-            else if (_activeDropdown != HUDEditorDropdown::None) _activeDropdown = HUDEditorDropdown::None;
-            else _selectedIndices.clear();
-        } else if (ctrl && key == 83) { // Ctrl+S
-            _project.saveToFile(_projectFilePath);
-            _projectDirty = false;
-        } else if (ctrl && key == 90) { // Ctrl+Z
-            undo();
-        } else if (ctrl && key == 89) { // Ctrl+Y
-            redo();
-        } else if (key == 261) { // Delete
-            deleteSelectedElements();
-        } else if (ctrl && key == 68) { // Ctrl+D
-            duplicateSelectedElements();
-        } else if (ctrl && key == 65) { // Ctrl+A
-            _selectedIndices.clear();
-            for(int i=0; i<(int)_project.rootElements.size(); ++i) _selectedIndices.push_back(i);
-        } else if (key == 71) { // G
-            _showGrid = !_showGrid;
-        } else if (key == 72) { // H
-            _showGuides = !_showGuides;
-        } else if (key == 265) { // Up
-            if (ctrl) moveSelectedZOrder(1);
-            else for (int idx : _selectedIndices) _project.rootElements[idx].y -= _gridSnap > 0 ? _gridSnap : 1;
-        } else if (key == 264) { // Down
-            if (ctrl) moveSelectedZOrder(-1);
-            else for (int idx : _selectedIndices) _project.rootElements[idx].y += _gridSnap > 0 ? _gridSnap : 1;
-        } else if (key == 263) { // Left
-            for (int idx : _selectedIndices) _project.rootElements[idx].x -= _gridSnap > 0 ? _gridSnap : 1;
-        } else if (key == 262) { // Right
-            for (int idx : _selectedIndices) _project.rootElements[idx].x += _gridSnap > 0 ? _gridSnap : 1;
+    void LabHUDEditor2D::selectElement(const ElementRef& ref, bool addToSelection) {
+        if (!addToSelection) _selectedRefs.clear();
+        _selectedRef = ref;
+        if (ref.isValid() && std::find(_selectedRefs.begin(), _selectedRefs.end(), ref) == _selectedRefs.end()) {
+            _selectedRefs.push_back(ref);
         }
     }
 
-    void LabHUDEditor2D::scanAssets() {
-        if (std::filesystem::exists("assets/hud_assets/")) {
-            for (const auto& entry : std::filesystem::directory_iterator("assets/hud_assets/")) {
-                if (entry.path().extension() == ".bmp") {
-                    _assetFiles.push_back(entry.path().filename().string());
-                }
-            }
-        }
+    void LabHUDEditor2D::clearSelection() {
+        _selectedRef.invalidate();
+        _selectedRefs.clear();
     }
 
-    void LabHUDEditor2D::scanProjects() {
-        if (std::filesystem::exists("assets/hud_projects/")) {
-            for (const auto& entry : std::filesystem::directory_iterator("assets/hud_projects/")) {
-                if (entry.path().extension() == ".labhud") {
-                    _discoveredProjects.push_back(entry.path().string());
-                }
-            }
-        }
+    bool LabHUDEditor2D::isSelected(const ElementRef& ref) const {
+        if (!ref.isValid()) return false;
+        return std::find(_selectedRefs.begin(), _selectedRefs.end(), ref) != _selectedRefs.end() || _selectedRef == ref;
     }
 
     Texture* LabHUDEditor2D::getAssetTexture(const std::string& path) {
         if (path.empty()) return nullptr;
-        if (_assetTextures.find(path) == _assetTextures.end()) {
-            std::string fullPath = resolveHUDPath(path);
-            if (!fullPath.empty()) {
-                _assetTextures[path] = std::make_unique<Texture>(fullPath);
-            } else {
-                return nullptr;
-            }
+        auto it = _assetTextures.find(path);
+        if (it != _assetTextures.end()) return it->second.get();
+        if (std::filesystem::exists(path)) {
+            try {
+                auto tex = std::make_unique<Texture>(path);
+                Texture* ptr = tex.get();
+                _assetTextures[path] = std::move(tex);
+                return ptr;
+            } catch (...) {}
         }
-        return _assetTextures[path].get();
+        return nullptr;
+    }
+
+    HUDElement LabHUDEditor2D::createFromTemplate(int templateIndex, float absX, float absY) const {
+        if (templateIndex < 0 || templateIndex >= (int)_widgetTemplates.size()) return {};
+        const auto& t = _widgetTemplates[templateIndex];
+        HUDElement el;
+        el.id = t.name + "_" + std::to_string(rand() % 900 + 100);
+        el.type = t.type;
+        el.x = absX;
+        el.y = absY;
+        el.w = t.defaultW;
+        el.h = t.defaultH;
+        el.color = t.defaultColor;
+        el.alpha = t.defaultAlpha;
+        el.text = t.defaultText;
+        el.anchor = HUDAnchor::TopLeft;
+        el.fontSize = 2.0f;
+        el.fontType = 0;
+        return el;
     }
 
     std::string LabHUDEditor2D::resolveHUDPath(const std::string& path) {
         if (std::filesystem::exists(path)) return path;
-        if (std::filesystem::exists("assets/hud_assets/" + path)) return "assets/hud_assets/" + path;
-        return "";
+        std::string fname = std::filesystem::path(path).filename().string();
+        if (std::filesystem::exists("assets/hud_projects/" + fname)) return "assets/hud_projects/" + fname;
+        if (std::filesystem::exists("../assets/hud_projects/" + fname)) return "../assets/hud_projects/" + fname;
+        if (std::filesystem::exists("../../assets/hud_projects/" + fname)) return "../../assets/hud_projects/" + fname;
+        return path;
     }
 
-    void LabHUDEditor2D::log(const std::string& msg) {
-        _consoleLogs.push_back(msg);
-        LabLog::info(msg);
+    void LabHUDEditor2D::scanProjects() {
+        _discoveredProjects.clear();
+        std::vector<std::string> dirs = {"assets/hud_projects", "../assets/hud_projects", "../../assets/hud_projects"};
+        for (const auto& d : dirs) {
+            if (std::filesystem::exists(d)) {
+                for (const auto& entry : std::filesystem::directory_iterator(d)) {
+                    if (entry.path().extension() == ".labhud") {
+                        _discoveredProjects.push_back(entry.path().string());
+                    }
+                }
+            }
+        }
+    }
+
+    void LabHUDEditor2D::scanAssets() {
+        _assetFiles.clear();
+        std::vector<std::string> dirs = {"assets/hud_assets", "../assets/hud_assets", "../../assets/hud_assets"};
+        for (const auto& d : dirs) {
+            if (std::filesystem::exists(d)) {
+                for (const auto& entry : std::filesystem::directory_iterator(d)) {
+                    auto ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (ext == ".bmp" || ext == ".png" || ext == ".jpg" || ext == ".tga") {
+                        _assetFiles.push_back(entry.path().string());
+                    }
+                }
+            }
+        }
+    }
+
+    void LabHUDEditor2D::renderProjectSelect(int w, int h) {
+        float fw = static_cast<float>(w);
+        float fh = static_cast<float>(h);
+        Renderer::drawRect(0, 0, fw, fh, Vec3(0.11f, 0.12f, 0.14f));
+
+        float bannerW = 720.0f;
+        float bannerH = 500.0f;
+        float bx = fw * 0.5f - bannerW * 0.5f;
+        float by = fh * 0.5f - bannerH * 0.5f;
+
+        drawHammerPanel(bx, by, bannerW, bannerH, "LAB ENGINE 2026 - HUD / GUI WORKSPACE LAUNCHER");
+
+        LabFont::drawText(bx + 40.0f, by + 40.0f, "PROJECT SELECTOR", 2.2f, Vec3(1.0f, 0.55f, 0.1f), LabFontType::System);
+        LabFont::drawText(bx + 40.0f, by + 75.0f, "Choose an existing .labhud interface project or author a new layout:", 1.5f, Vec3(0.7f, 0.7f, 0.7f), LabFontType::System);
+
+        float py = by + 110.0f;
+
+        if (_discoveredProjects.empty()) {
+            scanProjects();
+        }
+
+        for (int i = 0; i < (int)_discoveredProjects.size() && i < 4; ++i) {
+            std::string pName = std::filesystem::path(_discoveredProjects[i]).stem().string();
+            std::string btnText = "[PROJECT] " + pName + " (" + _discoveredProjects[i] + ")";
+            if (drawHammerButton(bx + 40.0f, py, bannerW - 80.0f, 38.0f, btnText, false, true)) {
+                auto loaded = HUDProject::loadFromFile(_discoveredProjects[i]);
+                if (loaded) {
+                    _project = *loaded;
+                    _projectFilePath = _discoveredProjects[i];
+                    _mode = HUDEditorMode::Editor;
+                    _projectDirty = false;
+                    scanAssets();
+                }
+            }
+            py += 46.0f;
+        }
+
+        py = by + bannerH - 75.0f;
+        if (drawHammerButton(bx + 40.0f, py, 190.0f, 40.0f, "+ NEW PROJECT")) {
+            _project = HUDProject();
+            _project.name = "New HUD Layout";
+            _projectFilePath = "assets/hud_projects/new_hud.labhud";
+            _mode = HUDEditorMode::Editor;
+            _projectDirty = true;
+            scanAssets();
+        }
+        if (drawHammerButton(bx + 265.0f, py, 190.0f, 40.0f, "OPEN FILE...")) {
+            std::string chosen = LabDialogs::openFileDialog(_window, "Lab HUD Files (*.labhud)\0*.labhud\0All Files (*.*)\0*.*\0", "assets\\hud_projects");
+            if (!chosen.empty()) {
+                auto loaded = HUDProject::loadFromFile(chosen);
+                if (loaded) {
+                    _project = *loaded;
+                    _projectFilePath = chosen;
+                    _mode = HUDEditorMode::Editor;
+                    _projectDirty = false;
+                    scanAssets();
+                }
+            }
+        }
+        if (drawHammerButton(bx + 490.0f, py, 190.0f, 40.0f, "EXIT")) {
+            _requestExit = true;
+        }
+
+        LabFont::drawText(20.0f, fh - 24.0f, "Lab 2D/HUD Editor | Architecture: LabStudio Hammer Theme | Lua 5.4 | YoungJasiek", 1.4f, Vec3(0.5f, 0.5f, 0.5f), LabFontType::System);
+    }
+
+    void LabHUDEditor2D::updateProjectSelect(float dt) {
+        (void)dt;
+    }
+
+    void LabHUDEditor2D::renderTopMenuBar(float w) {
+        Renderer::drawRect(0, 0, w, 32.0f, Vec3(0.18f, 0.18f, 0.18f));
+        drawHammerBevel(0, 0, w, 32.0f, false);
+
+        std::vector<std::string> menus = {"File", "Edit", "View", "Insert", "Assets", "Help"};
+        float mx = 10.0f;
+        for (int i = 0; i < (int)menus.size(); ++i) {
+            bool active = (_activeDropdown == (HUDEditorDropdown)i);
+            if (drawHammerButton(mx, 3.0f, 68.0f, 26.0f, menus[i], active)) {
+                if (active) _activeDropdown = HUDEditorDropdown::None;
+                else _activeDropdown = (HUDEditorDropdown)i;
+            }
+            mx += 72.0f;
+        }
+    }
+
+    void LabHUDEditor2D::renderToolbar(float w) {
+        Renderer::drawRect(0, 32.0f, w, 40.0f, Vec3(0.20f, 0.20f, 0.20f));
+        drawHammerBevel(0, 32.0f, w, 40.0f, false);
+
+        float tx = 10.0f;
+        auto drawTool = [&](int iconId, const std::string& tooltip, bool active = false) -> bool {
+            (void)tooltip;
+            bool clicked = false;
+            bool hover = (_mouseX >= tx && _mouseX <= tx + 32.0f && _mouseY >= 36.0f && _mouseY <= 68.0f);
+            bool pressed = hover && _lmbPressed;
+            Vec3 bg = active ? Vec3(1.0f, 0.55f, 0.1f) : (pressed ? Vec3(0.14f, 0.14f, 0.14f) : (hover ? Vec3(0.26f, 0.26f, 0.26f) : Vec3(0.20f, 0.20f, 0.20f)));
+            Renderer::drawRect(tx, 36.0f, 32.0f, 32.0f, bg);
+            drawHammerBevel(tx, 36.0f, 32.0f, 32.0f, pressed || active);
+            HammerIcons::drawToolbarIcon(iconId, tx + 4.0f, 40.0f, active ? Vec3(1,1,1) : Vec3(0.85f, 0.85f, 0.85f), bg);
+            if (hover && _lmbClicked) clicked = true;
+            tx += 36.0f;
+            return clicked;
+        };
+        auto drawSep = [&]() {
+            Renderer::drawRect(tx + 3.0f, 38.0f, 1.0f, 28.0f, Vec3(0.12f, 0.12f, 0.12f));
+            Renderer::drawRect(tx + 4.0f, 38.0f, 1.0f, 28.0f, Vec3(0.35f, 0.35f, 0.35f));
+            tx += 10.0f;
+        };
+
+        if (drawTool(0, "New Layout")) { _project = HUDProject(); _selectedRef.invalidate(); _selectedRefs.clear(); _projectDirty = true; }
+        if (drawTool(1, "Open...")) {
+            std::string chosen = LabDialogs::openFileDialog(_window, "Lab HUD Files (*.labhud)\0*.labhud\0All Files (*.*)\0*.*\0", "assets\\hud_projects");
+            if (!chosen.empty()) {
+                auto loaded = HUDProject::loadFromFile(chosen);
+                if (loaded) { _project = *loaded; _projectFilePath = chosen; _projectDirty = false; }
+            }
+        }
+        if (drawTool(2, "Save")) {
+            if (_projectFilePath.empty()) _projectFilePath = "assets/hud_projects/my_hud.labhud";
+            _project.saveToFile(_projectFilePath);
+            _projectDirty = false;
+        }
+        if (drawTool(3, "Save As...")) {
+            std::string savePath = LabDialogs::saveFileDialog(_window, "Lab HUD Files (*.labhud)\0*.labhud\0All Files (*.*)\0*.*\0", "custom_hud.labhud", "assets\\hud_projects");
+            if (!savePath.empty()) {
+                _project.saveToFile(savePath);
+                _projectFilePath = savePath;
+                _projectDirty = false;
+            }
+        }
+        drawSep();
+        if (drawTool(4, "Undo")) undo();
+        drawSep();
+        if (drawTool(5, "Delete")) deleteSelected();
+        if (drawTool(6, "Duplicate")) duplicateSelected();
+        drawSep();
+        if (drawTool(8, "Import Asset from Disk")) importCustomAsset();
+    }
+
+    void LabHUDEditor2D::renderStatusBar(float w, float h) {
+        Renderer::drawRect(0, h - 28.0f, w, 28.0f, Vec3(0.14f, 0.14f, 0.14f));
+        drawHammerBevel(0, h - 28.0f, w, 28.0f, false);
+
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Tool: Select | Zoom: %.2fx | Snap: %.0fpx | Elements: %zu | Project: %s%s",
+            _canvasZoom, _gridSnap, _project.rootElements.size(), _project.name.c_str(), _projectDirty ? " *" : "");
+        LabFont::drawText(12.0f, h - 22.0f, buf, 1.4f, Vec3(0.85f, 0.85f, 0.85f), LabFontType::System);
+    }
+
+    void LabHUDEditor2D::renderDropdownMenus(float w, float h) {
+        (void)w; (void)h;
+        if (_activeDropdown == HUDEditorDropdown::None) return;
+
+        float mx = 10.0f + static_cast<float>(static_cast<int>(_activeDropdown)) * 72.0f;
+        std::vector<std::string> items;
+
+        if (_activeDropdown == HUDEditorDropdown::File) {
+            items = {"New Project", "Open Project...", "Save", "Save As...", "-", "Close to Launcher", "Exit"};
+        } else if (_activeDropdown == HUDEditorDropdown::Edit) {
+            items = {"Undo (Ctrl+Z)", "Redo (Ctrl+Y)", "-", "Delete (Del)", "Duplicate (Ctrl+D)", "Select All (Ctrl+A)"};
+        } else if (_activeDropdown == HUDEditorDropdown::View) {
+            items = {"Zoom In (+)", "Zoom Out (-)", "Reset Zoom & Pan", "-", "Toggle Grid", "Toggle Guides"};
+        } else if (_activeDropdown == HUDEditorDropdown::Insert) {
+            for (const auto& t : _widgetTemplates) items.push_back(t.name);
+        } else if (_activeDropdown == HUDEditorDropdown::Assets) {
+            items = {"Import Asset from Disk...", "Refresh Assets Folder"};
+        } else if (_activeDropdown == HUDEditorDropdown::Help) {
+            items = {"Documentation (VDC Online)", "About Lab HUD"};
+        }
+
+        float mw = 220.0f;
+        float mh = static_cast<float>(items.size()) * 28.0f + 8.0f;
+        Renderer::drawRect(mx, 32.0f, mw, mh, Vec3(0.18f, 0.18f, 0.18f));
+        drawHammerBevel(mx, 32.0f, mw, mh, false);
+
+        float py = 36.0f;
+        for (const auto& item : items) {
+            bool hover = (_mouseX >= mx && _mouseX <= mx + mw && _mouseY >= py && _mouseY < py + 28.0f);
+            if (drawHammerDropdownItem(mx, py, mw, 28.0f, item, hover)) {
+                _activeDropdown = HUDEditorDropdown::None;
+                if (item == "Exit") _requestExit = true;
+                if (item == "Close to Launcher") { _mode = HUDEditorMode::ProjectSelect; scanProjects(); }
+                if (item == "Save") { _project.saveToFile(_projectFilePath); _projectDirty = false; }
+                if (item == "Undo (Ctrl+Z)") undo();
+                if (item == "Redo (Ctrl+Y)") redo();
+                if (item == "Delete (Del)") deleteSelected();
+                if (item == "Duplicate (Ctrl+D)") duplicateSelected();
+                if (item == "Select All (Ctrl+A)") {
+                    _selectedRefs.clear();
+                    for (int i = 0; i < (int)_project.rootElements.size(); ++i) _selectedRefs.push_back({i, -1});
+                    if (!_selectedRefs.empty()) _selectedRef = _selectedRefs[0];
+                }
+                if (item == "Import Asset from Disk...") importCustomAsset();
+                if (item == "Refresh Assets Folder") scanAssets();
+                if (item == "Toggle Grid") _showGrid = !_showGrid;
+                if (item == "Toggle Guides") _showGuides = !_showGuides;
+                if (item == "Zoom In (+)") _canvasZoom = std::min(5.0f, _canvasZoom * 1.25f);
+                if (item == "Zoom Out (-)") _canvasZoom = std::max(0.1f, _canvasZoom / 1.25f);
+                if (item == "Reset Zoom & Pan") { _canvasZoom = 0.75f; _canvasPanX = 20.0f; _canvasPanY = 20.0f; }
+            }
+            py += 28.0f;
+        }
     }
 
 } // namespace Lab
+
