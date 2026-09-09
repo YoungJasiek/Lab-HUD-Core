@@ -321,6 +321,15 @@ namespace Lab {
         float _paletteScrollY = 0.0f;
         float _hierarchyScrollY = 0.0f;
 
+        // Hierarchy Mouse Drag-and-Drop & Reordering
+        bool _isDraggingHierarchy = false;
+        ElementRef _draggedHierarchyRef;
+        ElementRef _potentialDragHierarchyRef;
+        float _hierarchyPressX = 0.0f;
+        float _hierarchyPressY = 0.0f;
+        ElementRef _hierarchyDropTargetRef;
+        int _hierarchyDropMode = 0; // 0 = insert before, 1 = drop as child, 2 = insert after
+
         // Property Panel State
         float _propertyScrollY = 0.0f;
 
@@ -424,6 +433,11 @@ namespace Lab {
         void selectElement(const ElementRef& ref, bool addToSelection = false);
         void clearSelection();
         bool isSelected(const ElementRef& ref) const;
+
+        // Hierarchy Operations
+        void moveHierarchyItem(const ElementRef& source, const ElementRef& target, int mode);
+        void moveHierarchyStep(const ElementRef& ref, int delta);
+        void unparentChild(const ElementRef& childRef);
 
         // Context Menu Management
         void openContextMenu(float sx, float sy, bool onElement, const ElementRef& targetRef);

@@ -367,6 +367,152 @@ namespace Lab {
             }
         }
     }
+
+    void LabHUDEditor2D::moveHierarchyStep(const ElementRef& ref, int delta) {
+        if (!ref.isValid()) return;
+        if (ref.isRoot()) {
+            int idx = ref.rootIndex;
+            if (delta < 0 && idx > 0) {
+                std::swap(_project.rootElements[idx], _project.rootElements[idx - 1]);
+                _selectedRefs = {{idx - 1, -1}};
+                _selectedRef = _selectedRefs[0];
+                _projectDirty = true;
+            } else if (delta > 0 && idx + 1 < (int)_project.rootElements.size()) {
+                std::swap(_project.rootElements[idx], _project.rootElements[idx + 1]);
+                _selectedRefs = {{idx + 1, -1}};
+                _selectedRef = _selectedRefs[0];
+                _projectDirty = true;
+            }
+        } else if (ref.isChild()) {
+            int rIdx = ref.rootIndex;
+            int cIdx = ref.childIndex;
+            if (rIdx >= 0 && rIdx < (int)_project.rootElements.size()) {
+                auto& children = _project.rootElements[rIdx].children;
+                if (delta < 0 && cIdx > 0) {
+                    std::swap(children[cIdx], children[cIdx - 1]);
+                    _selectedRefs = {{rIdx, cIdx - 1}};
+                    _selectedRef = _selectedRefs[0];
+                    _projectDirty = true;
+                } else if (delta > 0 && cIdx + 1 < (int)children.size()) {
+                    std::swap(children[cIdx], children[cIdx + 1]);
+                    _selectedRefs = {{rIdx, cIdx + 1}};
+                    _selectedRef = _selectedRefs[0];
+                    _projectDirty = true;
+                }
+            }
+        }
+    }
+
+    void LabHUDEditor2D::unparentChild(const ElementRef& childRef) {
+        if (!childRef.isChild()) return;
+        int rIdx = childRef.rootIndex;
+        int cIdx = childRef.childIndex;
+        if (rIdx < 0 || rIdx >= (int)_project.rootElements.size()) return;
+        auto& children = _project.rootElements[rIdx].children;
+        if (cIdx < 0 || cIdx >= (int)children.size()) return;
+
+        Vec2 absP = getElementAbsPos(childRef);
+        HUDElement elem = children[cIdx];
+        children.erase(children.begin() + cIdx);
+        elem.x = absP.x;
+        elem.y = absP.y;
+        elem.anchor = HUDAnchor::TopLeft;
+        _project.rootElements.push_back(elem);
+        int newIdx = (int)_project.rootElements.size() - 1;
+        _selectedRefs = {{newIdx, -1}};
+        _selectedRef = _selectedRefs[0];
+        _projectDirty = true;
+    }
+
+    void LabHUDEditor2D::moveHierarchyItem(const ElementRef& source, const ElementRef& target, int mode) {
+        if (!source.isValid() || !target.isValid() || source == target) return;
+
+        // Mode 1: Drop as child of target
+        if (mode == 1) {
+            int tgtRoot = target.rootIndex;
+            if (tgtRoot < 0 || tgtRoot >= (int)_project.rootElements.size()) return;
+
+            if (source.isRoot()) {
+                if (source.rootIndex == tgtRoot) return;
+                Vec2 srcAbs = getElementAbsPos(source);
+                Vec2 tgtAbs = getElementAbsPos({tgtRoot, -1});
+                HUDElement elem = _project.rootElements[source.rootIndex];
+                int srcIdx = source.rootIndex;
+                _project.rootElements.erase(_project.rootElements.begin() + srcIdx);
+                if (srcIdx < tgtRoot) tgtRoot--;
+                elem.x = srcAbs.x - tgtAbs.x;
+                elem.y = srcAbs.y - tgtAbs.y;
+                elem.anchor = HUDAnchor::TopLeft;
+                _project.rootElements[tgtRoot].children.push_back(elem);
+                int newChildIdx = (int)_project.rootElements[tgtRoot].children.size() - 1;
+                _selectedRefs = {{tgtRoot, newChildIdx}};
+                _selectedRef = _selectedRefs[0];
+                _projectDirty = true;
+            } else if (source.isChild()) {
+                if (source.rootIndex == tgtRoot) return;
+                Vec2 srcAbs = getElementAbsPos(source);
+                Vec2 tgtAbs = getElementAbsPos({tgtRoot, -1});
+                auto& oldChildren = _project.rootElements[source.rootIndex].children;
+                if (source.childIndex < 0 || source.childIndex >= (int)oldChildren.size()) return;
+                HUDElement elem = oldChildren[source.childIndex];
+                oldChildren.erase(oldChildren.begin() + source.childIndex);
+                elem.x = srcAbs.x - tgtAbs.x;
+                elem.y = srcAbs.y - tgtAbs.y;
+                elem.anchor = HUDAnchor::TopLeft;
+                _project.rootElements[tgtRoot].children.push_back(elem);
+                int newChildIdx = (int)_project.rootElements[tgtRoot].children.size() - 1;
+                _selectedRefs = {{tgtRoot, newChildIdx}};
+                _selectedRef = _selectedRefs[0];
+                _projectDirty = true;
+            }
+            return;
+        }
+
+        // Mode 0 (insert before) or Mode 2 (insert after)
+        if (source.isRoot() && target.isRoot()) {
+            int srcIdx = source.rootIndex;
+            int tgtIdx = target.rootIndex;
+            if (srcIdx == tgtIdx) return;
+            HUDElement elem = _project.rootElements[srcIdx];
+            _project.rootElements.erase(_project.rootElements.begin() + srcIdx);
+            if (srcIdx < tgtIdx) tgtIdx--;
+            int ins = (mode == 0) ? tgtIdx : tgtIdx + 1;
+            ins = std::clamp(ins, 0, (int)_project.rootElements.size());
+            _project.rootElements.insert(_project.rootElements.begin() + ins, elem);
+            _selectedRefs = {{ins, -1}};
+            _selectedRef = _selectedRefs[0];
+            _projectDirty = true;
+        } else if (source.isChild() && target.isChild() && source.rootIndex == target.rootIndex) {
+            auto& children = _project.rootElements[source.rootIndex].children;
+            int srcIdx = source.childIndex;
+            int tgtIdx = target.childIndex;
+            if (srcIdx == tgtIdx) return;
+            HUDElement elem = children[srcIdx];
+            children.erase(children.begin() + srcIdx);
+            if (srcIdx < tgtIdx) tgtIdx--;
+            int ins = (mode == 0) ? tgtIdx : tgtIdx + 1;
+            ins = std::clamp(ins, 0, (int)children.size());
+            children.insert(children.begin() + ins, elem);
+            _selectedRefs = {{source.rootIndex, ins}};
+            _selectedRef = _selectedRefs[0];
+            _projectDirty = true;
+        } else if (source.isChild() && target.isRoot()) {
+            Vec2 absP = getElementAbsPos(source);
+            auto& oldChildren = _project.rootElements[source.rootIndex].children;
+            if (source.childIndex < 0 || source.childIndex >= (int)oldChildren.size()) return;
+            HUDElement elem = oldChildren[source.childIndex];
+            oldChildren.erase(oldChildren.begin() + source.childIndex);
+            elem.x = absP.x;
+            elem.y = absP.y;
+            elem.anchor = HUDAnchor::TopLeft;
+            int ins = (mode == 0) ? target.rootIndex : target.rootIndex + 1;
+            ins = std::clamp(ins, 0, (int)_project.rootElements.size());
+            _project.rootElements.insert(_project.rootElements.begin() + ins, elem);
+            _selectedRefs = {{ins, -1}};
+            _selectedRef = _selectedRefs[0];
+            _projectDirty = true;
+        }
+    }
     
     float LabHUDEditor2D::screenToCanvasX(float sx) const { return (sx - _viewportX - _canvasPanX) / _canvasZoom; }
     float LabHUDEditor2D::screenToCanvasY(float sy) const { return (sy - _viewportY - _canvasPanY) / _canvasZoom; }
@@ -503,15 +649,26 @@ namespace Lab {
         float sw = elem.w * _canvasZoom;
         float sh = elem.h * _canvasZoom;
 
-        Renderer::drawRect(sx, sy, sw, sh, elem.color);
-        
-        if (elem.type == HUDElementType::Label || elem.type == HUDElementType::Button) {
+        if (elem.type == HUDElementType::Label) {
+            if (elem.alpha > 0.05f) {
+                Renderer::drawRect(sx, sy, sw, sh, Vec3(elem.color.x * 0.18f, elem.color.y * 0.18f, elem.color.z * 0.18f));
+            }
             float fontScale = elem.fontSize * _canvasZoom;
             float th = LabFont::getTextHeight(fontScale, (LabFontType)elem.fontType);
-            float ty = sy + std::max(0.0f, (sh - th) * 0.5f); // Centered vertically
+            float ty = sy + std::max(0.0f, (sh - th) * 0.5f);
             float tw = LabFont::getTextWidth(elem.text, fontScale, (LabFontType)elem.fontType);
             float tx = sx + std::max(0.0f, (sw - tw) * 0.5f);
-            LabFont::drawText(tx, ty, elem.text, fontScale, Vec3(1,1,1), (LabFontType)elem.fontType);
+            LabFont::drawText(tx, ty, elem.text, fontScale, elem.color, (LabFontType)elem.fontType);
+        } else {
+            Renderer::drawRect(sx, sy, sw, sh, elem.color);
+            if (elem.type == HUDElementType::Button) {
+                float fontScale = elem.fontSize * _canvasZoom;
+                float th = LabFont::getTextHeight(fontScale, (LabFontType)elem.fontType);
+                float ty = sy + std::max(0.0f, (sh - th) * 0.5f);
+                float tw = LabFont::getTextWidth(elem.text, fontScale, (LabFontType)elem.fontType);
+                float tx = sx + std::max(0.0f, (sw - tw) * 0.5f);
+                LabFont::drawText(tx, ty, elem.text, fontScale, Vec3(1,1,1), (LabFontType)elem.fontType);
+            }
         }
 
         for (int i = 0; i < (int)elem.children.size(); ++i) {
@@ -720,28 +877,198 @@ namespace Lab {
                     el.color = tmpl.defaultColor; el.alpha = tmpl.defaultAlpha; el.text = tmpl.defaultText;
                     _project.rootElements.push_back(el);
                     _selectedRefs = {{(int)_project.rootElements.size() - 1, -1}};
+                    _selectedRef = _selectedRefs[0];
+                    _projectDirty = true;
                 }
                 py += 35;
             }
         } else if (_sidebarTab == HUDSidebarTab::Hierarchy) {
-            for (int i = 0; i < (int)_project.rootElements.size(); ++i) {
-                bool sel = (!_selectedRefs.empty() && _selectedRefs[0].rootIndex == i && _selectedRefs[0].childIndex == -1);
-                if (drawHammerButton(x + 10, py, w - 20, 25, _project.rootElements[i].id, sel)) {
-                    _selectedRefs = {{i, -1}};
+            // Drag-and-drop state update on mouse release or movement
+            if (!_lmbPressed) {
+                if (_isDraggingHierarchy && _draggedHierarchyRef.isValid() && _hierarchyDropTargetRef.isValid()) {
+                    moveHierarchyItem(_draggedHierarchyRef, _hierarchyDropTargetRef, _hierarchyDropMode);
                 }
-                py += 28;
-                for (int j = 0; j < (int)_project.rootElements[i].children.size(); ++j) {
-                    bool csel = (!_selectedRefs.empty() && _selectedRefs[0].rootIndex == i && _selectedRefs[0].childIndex == j);
-                    if (drawHammerButton(x + 30, py, w - 40, 25, _project.rootElements[i].children[j].id, csel)) {
-                        _selectedRefs = {{i, j}};
-                    }
-                    py += 28;
+                _isDraggingHierarchy = false;
+                _draggedHierarchyRef.invalidate();
+                _potentialDragHierarchyRef.invalidate();
+                _hierarchyDropTargetRef.invalidate();
+            } else if (_potentialDragHierarchyRef.isValid() && !_isDraggingHierarchy) {
+                if (std::abs(_mouseX - _hierarchyPressX) > 4.0f || std::abs(_mouseY - _hierarchyPressY) > 4.0f) {
+                    _isDraggingHierarchy = true;
+                    _draggedHierarchyRef = _potentialDragHierarchyRef;
                 }
             }
-            if (drawHammerButton(x + 10, h - 40, w - 20, 30, "+ Add Child")) {
+
+            for (int i = 0; i < (int)_project.rootElements.size(); ++i) {
+                ElementRef ref = {i, -1};
+                bool sel = (!_selectedRefs.empty() && _selectedRefs[0] == ref);
+                float itemX = x + 10.0f;
+                float itemW = w - 20.0f;
+                float itemH = 26.0f;
+
+                // Mouse interaction for item row
+                bool rowHover = (_mouseX >= itemX && _mouseX <= itemX + itemW && _mouseY >= py && _mouseY <= py + itemH);
+                if (rowHover) {
+                    if (_isDraggingHierarchy) {
+                        _hierarchyDropTargetRef = ref;
+                        float relY = _mouseY - py;
+                        if (relY < 6.0f) _hierarchyDropMode = 0;       // Insert before
+                        else if (relY > 20.0f) _hierarchyDropMode = 2;  // Insert after
+                        else _hierarchyDropMode = 1;                    // Drop as child
+                    } else if (_lmbClicked) {
+                        _selectedRefs = {ref};
+                        _selectedRef = ref;
+                        _potentialDragHierarchyRef = ref;
+                        _hierarchyPressX = _mouseX;
+                        _hierarchyPressY = _mouseY;
+                    }
+                }
+
+                // Row background and bevel
+                Vec3 bg = sel ? Vec3(0.28f, 0.45f, 0.28f) : (rowHover ? Vec3(0.24f, 0.25f, 0.28f) : Vec3(0.16f, 0.17f, 0.19f));
+                Renderer::drawRect(itemX, py, itemW, itemH, bg);
+                drawHammerBevel(itemX, py, itemW, itemH, sel);
+
+                // Highlight drop destination
+                if (_isDraggingHierarchy && _hierarchyDropTargetRef == ref) {
+                    if (_hierarchyDropMode == 1) {
+                        Renderer::drawRect(itemX, py, itemW, itemH, Vec3(0.98f, 0.78f, 0.08f));
+                        drawHammerBevel(itemX, py, itemW, itemH, true);
+                    } else if (_hierarchyDropMode == 0) {
+                        Renderer::drawRect(itemX, py - 2.0f, itemW, 4.0f, Vec3(1.0f, 0.55f, 0.1f));
+                    } else if (_hierarchyDropMode == 2) {
+                        Renderer::drawRect(itemX, py + itemH - 2.0f, itemW, 4.0f, Vec3(1.0f, 0.55f, 0.1f));
+                    }
+                }
+
+                // Drag indicator icon + ID
+                std::string label = ":: [R] " + _project.rootElements[i].id;
+                LabFont::drawText(itemX + 6.0f, py + 4.0f, label, 1.25f, sel ? Vec3(1,1,1) : Vec3(0.85f, 0.85f, 0.85f), LabFontType::System);
+
+                // Action buttons on right edge
+                float btnSize = 20.0f;
+                float bx = itemX + itemW - 3.0f * (btnSize + 2.0f);
+                if (drawHammerButton(bx, py + 2.0f, btnSize, 22.0f, "^")) {
+                    moveHierarchyStep(ref, -1);
+                }
+                bx += btnSize + 2.0f;
+                if (drawHammerButton(bx, py + 2.0f, btnSize, 22.0f, "v")) {
+                    moveHierarchyStep(ref, 1);
+                }
+                bx += btnSize + 2.0f;
+                if (drawHammerButton(bx, py + 2.0f, btnSize, 22.0f, "+")) {
+                    HUDElement child;
+                    child.id = "Child_" + std::to_string(_project.rootElements[i].children.size() + 1);
+                    child.w = 60.0f; child.h = 30.0f; child.type = HUDElementType::Label;
+                    child.text = "Child"; child.color = {1,1,1};
+                    _project.rootElements[i].children.push_back(child);
+                    _selectedRefs = {{i, (int)_project.rootElements[i].children.size() - 1}};
+                    _selectedRef = _selectedRefs[0];
+                    _projectDirty = true;
+                }
+                py += 28.0f;
+
+                // Children of this root element
+                for (int j = 0; j < (int)_project.rootElements[i].children.size(); ++j) {
+                    ElementRef cref = {i, j};
+                    bool csel = (!_selectedRefs.empty() && _selectedRefs[0] == cref);
+                    float cX = x + 28.0f;
+                    float cW = w - 38.0f;
+                    float cH = 24.0f;
+
+                    bool cRowHover = (_mouseX >= cX && _mouseX <= cX + cW && _mouseY >= py && _mouseY <= py + cH);
+                    if (cRowHover) {
+                        if (_isDraggingHierarchy) {
+                            _hierarchyDropTargetRef = cref;
+                            _hierarchyDropMode = (_mouseY - py < cH * 0.5f) ? 0 : 2;
+                        } else if (_lmbClicked) {
+                            _selectedRefs = {cref};
+                            _selectedRef = cref;
+                            _potentialDragHierarchyRef = cref;
+                            _hierarchyPressX = _mouseX;
+                            _hierarchyPressY = _mouseY;
+                        }
+                    }
+
+                    Vec3 cbg = csel ? Vec3(0.24f, 0.40f, 0.24f) : (cRowHover ? Vec3(0.22f, 0.23f, 0.26f) : Vec3(0.14f, 0.15f, 0.17f));
+                    Renderer::drawRect(cX, py, cW, cH, cbg);
+                    drawHammerBevel(cX, py, cW, cH, csel);
+
+                    if (_isDraggingHierarchy && _hierarchyDropTargetRef == cref) {
+                        if (_hierarchyDropMode == 0) {
+                            Renderer::drawRect(cX, py - 2.0f, cW, 4.0f, Vec3(1.0f, 0.55f, 0.1f));
+                        } else {
+                            Renderer::drawRect(cX, py + cH - 2.0f, cW, 4.0f, Vec3(1.0f, 0.55f, 0.1f));
+                        }
+                    }
+
+                    std::string clabel = "|- :: " + _project.rootElements[i].children[j].id;
+                    LabFont::drawText(cX + 6.0f, py + 3.0f, clabel, 1.2f, csel ? Vec3(1,1,1) : Vec3(0.8f, 0.8f, 0.8f), LabFontType::System);
+
+                    float cbx = cX + cW - 3.0f * (btnSize + 2.0f);
+                    if (drawHammerButton(cbx, py + 1.0f, btnSize, 20.0f, "^")) {
+                        moveHierarchyStep(cref, -1);
+                    }
+                    cbx += btnSize + 2.0f;
+                    if (drawHammerButton(cbx, py + 1.0f, btnSize, 20.0f, "v")) {
+                        moveHierarchyStep(cref, 1);
+                    }
+                    cbx += btnSize + 2.0f;
+                    if (drawHammerButton(cbx, py + 1.0f, btnSize, 20.0f, "X")) {
+                        unparentChild(cref);
+                    }
+                    py += 26.0f;
+                }
+            }
+
+            // Bottom toolbar for Hierarchy
+            float btmY = y + h - 72.0f;
+            Renderer::drawRect(x + 5.0f, btmY, w - 10.0f, 1.0f, Vec3(0.3f, 0.3f, 0.3f));
+            btmY += 6.0f;
+            float hw = (w - 25.0f) * 0.5f;
+            if (drawHammerButton(x + 10.0f, btmY, hw, 26.0f, "+ Add Root")) {
+                HUDElement el;
+                el.id = "Element_" + std::to_string(_project.rootElements.size() + 1);
+                el.w = 120.0f; el.h = 40.0f; el.type = HUDElementType::Rect;
+                el.color = {0.8f, 0.8f, 0.8f};
+                _project.rootElements.push_back(el);
+                _selectedRefs = {{(int)_project.rootElements.size() - 1, -1}};
+                _selectedRef = _selectedRefs[0];
+                _projectDirty = true;
+            }
+            if (drawHammerButton(x + 15.0f + hw, btmY, hw, 26.0f, "+ Add Child")) {
                 if (!_selectedRefs.empty() && _selectedRefs[0].isRoot()) {
-                    HUDElement child; child.id = "Child"; child.w = 50; child.h = 50; child.type = HUDElementType::Rect;
-                    _project.rootElements[_selectedRefs[0].rootIndex].children.push_back(child);
+                    int rIdx = _selectedRefs[0].rootIndex;
+                    HUDElement child;
+                    child.id = "Child_" + std::to_string(_project.rootElements[rIdx].children.size() + 1);
+                    child.w = 60.0f; child.h = 30.0f; child.type = HUDElementType::Label;
+                    child.text = "Child"; child.color = {1,1,1};
+                    _project.rootElements[rIdx].children.push_back(child);
+                    _selectedRefs = {{rIdx, (int)_project.rootElements[rIdx].children.size() - 1}};
+                    _selectedRef = _selectedRefs[0];
+                    _projectDirty = true;
+                }
+            }
+            btmY += 30.0f;
+            float tw3 = (w - 30.0f) / 3.0f;
+            if (drawHammerButton(x + 10.0f, btmY, tw3, 24.0f, "^ Up")) {
+                if (!_selectedRefs.empty()) moveHierarchyStep(_selectedRefs[0], -1);
+            }
+            if (drawHammerButton(x + 15.0f + tw3, btmY, tw3, 24.0f, "v Down")) {
+                if (!_selectedRefs.empty()) moveHierarchyStep(_selectedRefs[0], 1);
+            }
+            if (drawHammerButton(x + 20.0f + tw3 * 2.0f, btmY, tw3, 24.0f, "Unparent")) {
+                if (!_selectedRefs.empty() && _selectedRefs[0].isChild()) unparentChild(_selectedRefs[0]);
+            }
+
+            // Draw floating drag badge if mouse is dragging an item
+            if (_isDraggingHierarchy && _draggedHierarchyRef.isValid()) {
+                const HUDElement* drg = getElement(_draggedHierarchyRef);
+                if (drg) {
+                    float dw = 140.0f;
+                    Renderer::drawRect(_mouseX + 14.0f, _mouseY - 12.0f, dw, 24.0f, Vec3(0.20f, 0.22f, 0.26f));
+                    drawHammerBevel(_mouseX + 14.0f, _mouseY - 12.0f, dw, 24.0f, false);
+                    LabFont::drawText(_mouseX + 20.0f, _mouseY - 8.0f, "Move: " + drg->id, 1.2f, Vec3(0.98f, 0.78f, 0.08f), LabFontType::System);
                 }
             }
         } else if (_sidebarTab == HUDSidebarTab::Assets) {
@@ -768,54 +1095,139 @@ namespace Lab {
         if (!elem) return;
         
         float py = y + 25;
-        LabFont::drawText(x + 10, py, "ID: " + elem->id, 1.2f, Vec3(1,1,1), LabFontType::System); py += 25;
+        LabFont::drawText(x + 10, py, "ID: " + elem->id + " (" + hudElementTypeName(elem->type) + ")", 1.2f, Vec3(1,1,1), LabFontType::System); py += 25;
         
-        drawHammerSlider(x + 10, py, w - 20, 20, "W", elem->w, 0, 2000, "%.0f"); py += 25;
-        drawHammerSlider(x + 10, py, w - 20, 20, "H", elem->h, 0, 2000, "%.0f"); py += 25;
+        // Dimensions
+        if (drawHammerSlider(x + 10, py, w - 20, 20, "W", elem->w, 0, 2000, "%.0f")) _projectDirty = true; py += 24;
+        if (drawHammerSlider(x + 10, py, w - 20, 20, "H", elem->h, 0, 2000, "%.0f")) _projectDirty = true; py += 28;
         
-        if (elem->type == HUDElementType::Label || elem->type == HUDElementType::Button) {
-            if (drawHammerButton(x + 10, py, w - 20, 30, "Edit Text...")) {
-                openModal(ModalType::EditText, "Edit Text", "Enter text:", elem->text, [elem](const std::string& v){ elem->text = v; });
+        // =====================================================================
+        // COLOR & OPACITY CONTROLS
+        // =====================================================================
+        Renderer::drawRect(x + 5, py, w - 10, 1, Vec3(0.3f, 0.3f, 0.3f)); py += 8;
+        LabFont::drawText(x + 10, py, "COLOR & OPACITY", 1.2f, Vec3(1.0f, 0.75f, 0.2f), LabFontType::System); py += 20;
+        
+        // Visual Color Swatch Preview
+        float swatchW = w - 20;
+        float swatchH = 26.0f;
+        Renderer::drawRect(x + 10, py, swatchW, swatchH, elem->color);
+        drawHammerBevel(x + 10, py, swatchW, swatchH, false);
+        
+        char colBuf[64];
+        snprintf(colBuf, sizeof(colBuf), "RGB(%d, %d, %d) A:%.0f%%", 
+            (int)(elem->color.x * 255.0f), (int)(elem->color.y * 255.0f), (int)(elem->color.z * 255.0f), elem->alpha * 100.0f);
+        Vec3 swatchTextCol = (elem->color.x * 0.299f + elem->color.y * 0.587f + elem->color.z * 0.114f > 0.5f) ? Vec3(0,0,0) : Vec3(1,1,1);
+        LabFont::drawText(x + 18, py + 4, colBuf, 1.25f, swatchTextCol, LabFontType::System);
+        py += 32;
+        
+        // RGBA Sliders
+        if (drawHammerSlider(x + 10, py, w - 20, 18, "Red", elem->color.x, 0.0f, 1.0f, "%.2f")) _projectDirty = true; py += 22;
+        if (drawHammerSlider(x + 10, py, w - 20, 18, "Green", elem->color.y, 0.0f, 1.0f, "%.2f")) _projectDirty = true; py += 22;
+        if (drawHammerSlider(x + 10, py, w - 20, 18, "Blue", elem->color.z, 0.0f, 1.0f, "%.2f")) _projectDirty = true; py += 22;
+        if (drawHammerSlider(x + 10, py, w - 20, 18, "Alpha", elem->alpha, 0.0f, 1.0f, "%.2f")) _projectDirty = true; py += 26;
+        
+        // Quick Palette Swatches
+        struct PaletteCol { const char* name; Vec3 col; };
+        static const PaletteCol s_palette[] = {
+            {"Gold", {0.98f, 0.78f, 0.08f}},
+            {"Red", {0.95f, 0.22f, 0.22f}},
+            {"Green", {0.18f, 0.85f, 0.32f}},
+            {"Blue", {0.22f, 0.60f, 1.00f}},
+            {"White", {1.00f, 1.00f, 1.00f}},
+            {"Dark", {0.15f, 0.16f, 0.18f}},
+            {"Orange", {1.00f, 0.50f, 0.10f}},
+            {"Cyan", {0.15f, 0.85f, 0.90f}}
+        };
+        float btnW = (w - 30.0f) / 4.0f;
+        for (int row = 0; row < 2; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                int pIdx = row * 4 + col;
+                float bx = x + 10 + col * (btnW + 3);
+                if (drawHammerButton(bx, py, btnW, 22, s_palette[pIdx].name)) {
+                    elem->color = s_palette[pIdx].col;
+                    _projectDirty = true;
+                }
             }
-            py += 35;
-            
-            LabFont::drawText(x + 10, py, "Font Type:", 1.2f, Vec3(1,1,1), LabFontType::System); py += 20;
+            py += 25;
+        }
+        py += 6;
+
+        // =====================================================================
+        // TYPOGRAPHY & FONT SIZE CONTROLS
+        // =====================================================================
+        if (elem->type == HUDElementType::Label || elem->type == HUDElementType::Button || !elem->text.empty()) {
+            Renderer::drawRect(x + 5, py, w - 10, 1, Vec3(0.3f, 0.3f, 0.3f)); py += 8;
+            LabFont::drawText(x + 10, py, "TYPOGRAPHY", 1.2f, Vec3(1.0f, 0.75f, 0.2f), LabFontType::System); py += 20;
+
+            if (drawHammerButton(x + 10, py, w - 20, 26, "Edit Text: \"" + (elem->text.empty() ? "(empty)" : elem->text.substr(0, 18)) + "\"")) {
+                openModal(ModalType::EditText, "Edit Text", "Enter text:", elem->text, [elem, this](const std::string& v){ elem->text = v; _projectDirty = true; });
+            }
+            py += 30;
+
+            // Font Type Buttons
+            LabFont::drawText(x + 10, py, "Font Type:", 1.2f, Vec3(0.85f, 0.85f, 0.85f), LabFontType::System); py += 18;
             float fw = (w - 30) / 3.0f;
-            if (drawHammerButton(x + 10, py, fw, 30, "GeoSans", elem->fontType == 0)) elem->fontType = 0;
-            if (drawHammerButton(x + 10 + fw, py, fw, 30, "System", elem->fontType == 1)) elem->fontType = 1;
-            if (drawHammerButton(x + 10 + fw*2, py, fw, 30, "DotMatrix", elem->fontType == 2)) elem->fontType = 2;
-            py += 35;
+            if (drawHammerButton(x + 10, py, fw, 24, "GeoSans", elem->fontType == 0)) { elem->fontType = 0; _projectDirty = true; }
+            if (drawHammerButton(x + 10 + fw, py, fw, 24, "System", elem->fontType == 1)) { elem->fontType = 1; _projectDirty = true; }
+            if (drawHammerButton(x + 10 + fw*2, py, fw, 24, "DotMatrix", elem->fontType == 2)) { elem->fontType = 2; _projectDirty = true; }
+            py += 28;
+
+            // Font Size Slider
+            if (drawHammerSlider(x + 10, py, w - 20, 18, "Size", elem->fontSize, 0.5f, 6.0f, "%.1f")) _projectDirty = true;
+            py += 24;
+
+            // Font Size Quick Nudge & Presets
+            float nbW = (w - 35) / 5.0f;
+            if (drawHammerButton(x + 10, py, nbW, 22, "-")) {
+                elem->fontSize = std::max(0.5f, elem->fontSize - 0.2f);
+                _projectDirty = true;
+            }
+            if (drawHammerButton(x + 10 + nbW + 2, py, nbW, 22, "+")) {
+                elem->fontSize = std::min(6.0f, elem->fontSize + 0.2f);
+                _projectDirty = true;
+            }
+            if (drawHammerButton(x + 10 + (nbW + 2) * 2, py, nbW, 22, "1.2", std::abs(elem->fontSize - 1.2f) < 0.05f)) { elem->fontSize = 1.2f; _projectDirty = true; }
+            if (drawHammerButton(x + 10 + (nbW + 2) * 3, py, nbW, 22, "1.8", std::abs(elem->fontSize - 1.8f) < 0.05f)) { elem->fontSize = 1.8f; _projectDirty = true; }
+            if (drawHammerButton(x + 10 + (nbW + 2) * 4, py, nbW, 22, "2.5", std::abs(elem->fontSize - 2.5f) < 0.05f)) { elem->fontSize = 2.5f; _projectDirty = true; }
+            py += 30;
         }
 
-        py += 10;
-        Renderer::drawRect(x + 5, py, w - 10, 1, Vec3(0.3f, 0.3f, 0.3f)); py += 10;
-        LabFont::drawText(x + 10, py, "LUA SCRIPTING", 1.2f, Vec3(1, 0.5f, 0), LabFontType::System); py += 20;
+        // =====================================================================
+        // LUA SCRIPTING
+        // =====================================================================
+        Renderer::drawRect(x + 5, py, w - 10, 1, Vec3(0.3f, 0.3f, 0.3f)); py += 8;
+        LabFont::drawText(x + 10, py, "LUA SCRIPTING", 1.2f, Vec3(1, 0.5f, 0), LabFontType::System); py += 18;
         
-        if (drawHammerButton(x + 10, py, w - 20, 30, "Edit Lua Script...")) {
-            openModal(ModalType::EditLua, "Edit Lua", "Enter script:", elem->luaCustom, [elem](const std::string& v){ elem->luaCustom = v; });
+        if (drawHammerButton(x + 10, py, w - 20, 26, "Edit Lua Script...")) {
+            openModal(ModalType::EditLua, "Edit Lua", "Enter script:", elem->luaCustom, [elem, this](const std::string& v){ elem->luaCustom = v; _projectDirty = true; });
         }
-        py += 35;
+        py += 30;
         
-        LabFont::drawText(x + 10, py, "Presets:", 1.2f, Vec3(0.8f,0.8f,0.8f), LabFontType::System); py += 20;
-        if (drawHammerButton(x + 10, py, w - 20, 25, "[Player Health]")) {
+        LabFont::drawText(x + 10, py, "Presets:", 1.2f, Vec3(0.8f,0.8f,0.8f), LabFontType::System); py += 18;
+        if (drawHammerButton(x + 10, py, w - 20, 22, "[Player Health]")) {
             elem->binding = "Player:getHealth()";
             elem->luaOnUpdate = "elem.text = tostring(Player:getHealth()); if Player:getHealth() < 30 then elem.color = {1,0.2,0.2} end";
-        } py += 28;
-        if (drawHammerButton(x + 10, py, w - 20, 25, "[Player Armor]")) {
+            _projectDirty = true;
+        } py += 24;
+        if (drawHammerButton(x + 10, py, w - 20, 22, "[Player Armor]")) {
             elem->binding = "Player:getArmor()";
             elem->luaOnUpdate = "elem.text = Player:getArmor() .. '%'";
-        } py += 28;
-        if (drawHammerButton(x + 10, py, w - 20, 25, "[Weapon Ammo]")) {
+            _projectDirty = true;
+        } py += 24;
+        if (drawHammerButton(x + 10, py, w - 20, 22, "[Weapon Ammo]")) {
             elem->binding = "Weapon:getAmmo()";
             elem->luaOnUpdate = "elem.text = Weapon:getClip() .. ' / ' .. Weapon:getReserve()";
-        } py += 28;
-        if (drawHammerButton(x + 10, py, w - 20, 25, "[Match Timer]")) {
+            _projectDirty = true;
+        } py += 24;
+        if (drawHammerButton(x + 10, py, w - 20, 22, "[Match Timer]")) {
             elem->binding = "Match:getTimer()";
             elem->luaOnUpdate = "elem.text = tostring(math.floor(Match:getTimer()))";
-        } py += 28;
-        if (drawHammerButton(x + 10, py, w - 20, 25, "[Respawn Button]")) {
+            _projectDirty = true;
+        } py += 24;
+        if (drawHammerButton(x + 10, py, w - 20, 22, "[Respawn Button]")) {
             elem->luaOnClick = "Player:respawn(); HUD:hide()";
-        } py += 28;
+            _projectDirty = true;
+        } py += 24;
     }
 
 }
