@@ -224,7 +224,8 @@ namespace Lab {
     // =========================================================================
 
     Vec2 LabHUDEditor2D::getElementAbsPos(const ElementRef& ref) const {
-        if (!ref.isValid()) return {0.0f,0.0f};
+        if (!ref.isValid()) return {0.0f, 0.0f};
+        if (ref.rootIndex < 0 || ref.rootIndex >= (int)_project.rootElements.size()) return {0.0f, 0.0f};
         const HUDElement& root = _project.rootElements[ref.rootIndex];
         Vec2 pos = {root.x, root.y};
         
@@ -242,6 +243,7 @@ namespace Lab {
             case HUDAnchor::BottomRight: pos.x += sw; pos.y += sh; break;
         }
         if (ref.isChild()) {
+            if (ref.childIndex < 0 || ref.childIndex >= (int)root.children.size()) return pos;
             const HUDElement& child = root.children[ref.childIndex];
             pos.x += child.x;
             pos.y += child.y;
@@ -251,6 +253,7 @@ namespace Lab {
 
     void LabHUDEditor2D::setElementAbsPos(const ElementRef& ref, const Vec2& targetAbs) {
         if (!ref.isValid()) return;
+        if (ref.rootIndex < 0 || ref.rootIndex >= (int)_project.rootElements.size()) return;
         HUDElement& root = _project.rootElements[ref.rootIndex];
         if (ref.isRoot()) {
             Vec2 anchorPos = {0.0f,0.0f};
@@ -270,6 +273,7 @@ namespace Lab {
             root.x = targetAbs.x - anchorPos.x;
             root.y = targetAbs.y - anchorPos.y;
         } else {
+            if (ref.childIndex < 0 || ref.childIndex >= (int)root.children.size()) return;
             HUDElement& child = root.children[ref.childIndex];
             Vec2 rootAbs = getElementAbsPos({ref.rootIndex, -1});
             child.x = targetAbs.x - rootAbs.x;
@@ -300,23 +304,31 @@ namespace Lab {
 
     int LabHUDEditor2D::hitTestResizeHandle(float cx, float cy, const ElementRef& ref) const {
         // Mock resize hit test
+        (void)cx; (void)cy; (void)ref;
         return -1;
     }
     
     Vec2 LabHUDEditor2D::getElementSize(const ElementRef& ref) const {
+        if (!ref.isValid()) return {0.0f, 0.0f};
+        if (ref.rootIndex < 0 || ref.rootIndex >= (int)_project.rootElements.size()) return {0.0f, 0.0f};
         if (ref.isRoot()) return {_project.rootElements[ref.rootIndex].w, _project.rootElements[ref.rootIndex].h};
+        if (ref.childIndex < 0 || ref.childIndex >= (int)_project.rootElements[ref.rootIndex].children.size()) return {0.0f, 0.0f};
         return {_project.rootElements[ref.rootIndex].children[ref.childIndex].w, _project.rootElements[ref.rootIndex].children[ref.childIndex].h};
     }
 
     HUDElement* LabHUDEditor2D::getElement(const ElementRef& ref) {
         if (!ref.isValid()) return nullptr;
+        if (ref.rootIndex < 0 || ref.rootIndex >= (int)_project.rootElements.size()) return nullptr;
         if (ref.isRoot()) return &_project.rootElements[ref.rootIndex];
+        if (ref.childIndex < 0 || ref.childIndex >= (int)_project.rootElements[ref.rootIndex].children.size()) return nullptr;
         return &_project.rootElements[ref.rootIndex].children[ref.childIndex];
     }
 
     const HUDElement* LabHUDEditor2D::getElement(const ElementRef& ref) const {
         if (!ref.isValid()) return nullptr;
+        if (ref.rootIndex < 0 || ref.rootIndex >= (int)_project.rootElements.size()) return nullptr;
         if (ref.isRoot()) return &_project.rootElements[ref.rootIndex];
+        if (ref.childIndex < 0 || ref.childIndex >= (int)_project.rootElements[ref.rootIndex].children.size()) return nullptr;
         return &_project.rootElements[ref.rootIndex].children[ref.childIndex];
     }
     
@@ -345,25 +357,59 @@ namespace Lab {
     void LabHUDEditor2D::redo() {}
     
     void LabHUDEditor2D::deleteSelected() {
+        ElementRef targetToDelete;
         if (!_selectedRefs.empty()) {
-            auto ref = _selectedRefs[0];
-            if (ref.isRoot()) {
-                _project.rootElements.erase(_project.rootElements.begin() + ref.rootIndex);
-            } else {
-                _project.rootElements[ref.rootIndex].children.erase(_project.rootElements[ref.rootIndex].children.begin() + ref.childIndex);
-            }
-            _selectedRefs.clear();
+            targetToDelete = _selectedRefs[0];
+        } else if (_selectedRef.isValid()) {
+            targetToDelete = _selectedRef;
         }
+
+        if (targetToDelete.isValid() && targetToDelete.rootIndex >= 0 && targetToDelete.rootIndex < (int)_project.rootElements.size()) {
+            if (targetToDelete.isRoot()) {
+                _project.rootElements.erase(_project.rootElements.begin() + targetToDelete.rootIndex);
+            } else {
+                auto& ch = _project.rootElements[targetToDelete.rootIndex].children;
+                if (targetToDelete.childIndex >= 0 && targetToDelete.childIndex < (int)ch.size()) {
+                    ch.erase(ch.begin() + targetToDelete.childIndex);
+                }
+            }
+        }
+        clearSelection();
+        _hoveredRef.invalidate();
+        _potentialDragHierarchyRef.invalidate();
+        _draggedHierarchyRef.invalidate();
+        _hierarchyDropTargetRef.invalidate();
+        _contextMenuOpen = false;
+        _projectDirty = true;
     }
     
     void LabHUDEditor2D::duplicateSelected() {
-        if (!_selectedRefs.empty()) {
-            auto ref = _selectedRefs[0];
-            if (ref.isRoot()) {
-                auto copy = _project.rootElements[ref.rootIndex];
-                copy.x += 20; copy.y += 20;
+        ElementRef targetToDup;
+        if (!_selectedRefs.empty()) targetToDup = _selectedRefs[0];
+        else if (_selectedRef.isValid()) targetToDup = _selectedRef;
+
+        if (targetToDup.isValid() && targetToDup.rootIndex >= 0 && targetToDup.rootIndex < (int)_project.rootElements.size()) {
+            if (targetToDup.isRoot()) {
+                auto copy = _project.rootElements[targetToDup.rootIndex];
+                copy.id += "_copy";
+                copy.x += 20.0f; copy.y += 20.0f;
                 _project.rootElements.push_back(copy);
-                _selectedRefs = {{(int)_project.rootElements.size()-1, -1}};
+                int newIdx = (int)_project.rootElements.size() - 1;
+                _selectedRefs = {{newIdx, -1}};
+                _selectedRef = _selectedRefs[0];
+                _projectDirty = true;
+            } else {
+                auto& ch = _project.rootElements[targetToDup.rootIndex].children;
+                if (targetToDup.childIndex >= 0 && targetToDup.childIndex < (int)ch.size()) {
+                    auto copy = ch[targetToDup.childIndex];
+                    copy.id += "_copy";
+                    copy.x += 15.0f; copy.y += 15.0f;
+                    ch.push_back(copy);
+                    int newChildIdx = (int)ch.size() - 1;
+                    _selectedRefs = {{targetToDup.rootIndex, newChildIdx}};
+                    _selectedRef = _selectedRefs[0];
+                    _projectDirty = true;
+                }
             }
         }
     }
@@ -729,11 +775,20 @@ namespace Lab {
 
         // 4. Selection Outlines and Handles
         if (_selectedRef.isValid()) {
-            renderSelectionOutlineAndHandles(_selectedRef, _viewportX, _viewportY);
+            if (getElement(_selectedRef)) {
+                renderSelectionOutlineAndHandles(_selectedRef, _viewportX, _viewportY);
+            } else {
+                _selectedRef.invalidate();
+            }
         }
-        for (const auto& ref : _selectedRefs) {
-            if (ref.isValid() && ref != _selectedRef) {
-                renderSelectionOutlineAndHandles(ref, _viewportX, _viewportY);
+        for (auto it = _selectedRefs.begin(); it != _selectedRefs.end(); ) {
+            if (it->isValid() && getElement(*it)) {
+                if (*it != _selectedRef) {
+                    renderSelectionOutlineAndHandles(*it, _viewportX, _viewportY);
+                }
+                ++it;
+            } else {
+                it = _selectedRefs.erase(it);
             }
         }
 
