@@ -458,10 +458,10 @@ namespace Lab {
                 }
                 if (_clampToSafeZone && !_selectedRefs.empty()) {
                     Vec2 sz = getElementSize(_selectedRefs[0]);
-                    float minX = _project.resolutionW * 0.05f;
-                    float maxX = _project.resolutionW * 0.95f - sz.x;
-                    float minY = _project.resolutionH * 0.05f;
-                    float maxY = _project.resolutionH * 0.95f - sz.y;
+                    float minX = 0.0f;
+                    float maxX = _project.resolutionW - sz.x;
+                    float minY = 0.0f;
+                    float maxY = _project.resolutionH - sz.y;
                     targetAbs.x = std::clamp(targetAbs.x, minX, std::max(minX, maxX));
                     targetAbs.y = std::clamp(targetAbs.y, minY, std::max(minY, maxY));
                 }
@@ -1017,6 +1017,20 @@ namespace Lab {
         float eh = elem->h * _canvasZoom;
 
         Vec3 outlineCol(0.2f, 0.6f, 1.0f);
+        if (_showSafeZone) {
+            float minX = _project.resolutionW * 0.05f;
+            float maxX = _project.resolutionW * 0.95f;
+            float minY = _project.resolutionH * 0.05f;
+            float maxY = _project.resolutionH * 0.95f;
+            bool outsideScreen = (absP.x < 0.0f || absP.x + elem->w > _project.resolutionW || absP.y < 0.0f || absP.y + elem->h > _project.resolutionH);
+            bool outsideSafe = (absP.x < minX || absP.x + elem->w > maxX || absP.y < minY || absP.y + elem->h > maxY);
+            if (outsideScreen) {
+                outlineCol = Vec3(0.95f, 0.25f, 0.25f); // Red warning: outside screen
+            } else if (outsideSafe) {
+                outlineCol = Vec3(0.98f, 0.78f, 0.08f); // Gold warning: outside safe zone
+            }
+        }
+
         Renderer::drawRect(ex - 1.0f, ey - 1.0f, ew + 2.0f, 1.5f, outlineCol);
         Renderer::drawRect(ex - 1.0f, ey - 1.0f, 1.5f, eh + 2.0f, outlineCol);
         Renderer::drawRect(ex - 1.0f, ey + eh - 0.5f, ew + 2.0f, 1.5f, outlineCol);

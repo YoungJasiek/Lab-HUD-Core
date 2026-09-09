@@ -305,7 +305,7 @@ namespace Lab {
         bool _showGrid = true;
         bool _showGuides = true;
         bool _showSafeZone = true;
-        bool _clampToSafeZone = true;
+        bool _clampToSafeZone = false;
         bool _isPanning = false;
         float _panStartX = 0.0f, _panStartY = 0.0f;
         float _panStartCanvasX = 0.0f, _panStartCanvasY = 0.0f;
